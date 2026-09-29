@@ -1,0 +1,346 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  OWNER
+  STAFF
+}
+
+enum Status {
+  OPEN
+  PAID
+  VOIDED
+  REFUNDED
+}
+
+enum PaymentType {
+  CASH
+  PROMPTPAY
+}
+
+enum StockMovementReason {
+  SALE
+  RESTOCK
+  WASTE
+  COUNT_CORRECTION
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+
+  CREATE_STAFF
+  UPDATE_STAFF
+  ACTIVATE_STAFF
+  DEACTIVATE_STAFF
+
+  CREATE_CATEGORY
+  UPDATE_CATEGORY
+  ACTIVE_CATEGORY
+  DEACTIVATE_CATEGORY
+
+  CREATE_PRODUCT
+  UPDATE_PRODUCT
+  ACTIVE_PRODUCT
+  DEACTIVATE_PRODUCT
+
+  CREATE_ORDER
+  PAY_ORDER
+  VOID_ORDER
+  REFUND_ORDER
+
+  OPEN_CASH_SESSION
+  CLOSE_CASH_SESSION
+
+  CREATE_INGREDIENT
+  UPDATE_INGREDIENT
+  ACTIVE_INGREDIENT
+  DEACTIVATE_INGREDIENT
+
+  CREATE_RECIPE
+  UPDATE_RECIPE
+  DELETE_RECIPE
+
+  CREATE_MODIFIER_GROUP
+  UPDATE_MODIFIER_GROUP
+  ACTIVE_MODIFIER_GROUP
+  DEACTIVATE_MODIFIER_GROUP
+
+  CREATE_MODIFIER_OPTION
+  UPDATE_MODIFIER_OPTION
+  ACTIVE_MODIFIER_OPTION
+  DEACTIVATE_MODIFIER_OPTION
+
+  ATTACH_MODIFIER_GROUP
+  UPDATE_PRODUCT_MODIFIER_GROUP
+  DETACH_MODIFIER_GROUP
+
+  STOCK_ADJUSTMENT
+}
+
+model Staff {
+  id        String   @id @default(uuid(7))
+  name      String
+  pin_hash  String
+  role      Role     @default(STAFF)
+  is_active Boolean  @default(true)
+  update_at DateTime @default(now()) @updatedAt
+  create_at DateTime @default(now())
+
+  order           Order[]
+  payment         Payment[]
+  audit_log       AuditLog[]
+  opened_by_staff CashSession[] @relation("opened_by_staff_id")
+  close_by_staff  CashSession[] @relation("close_by_staff_id")
+}
+
+model AuditLog {
+  id String @id @default(uuid(7))
+
+  action AuditAction
+
+  staff_id String
+  staff    Staff  @relation(fields: [staff_id], references: [id])
+
+  entity_type String
+  entity_id   String?
+
+  metadata Json?
+
+  ip_address String?
+  user_agent String?
+
+  create_at DateTime @default(now())
+
+  @@index([staff_id])
+  @@index([action])
+  @@index([entity_type, entity_id])
+  @@index([create_at])
+}
+
+model Category {
+  id         String   @id @default(uuid(7))
+  name       String
+  sort_order Int
+  is_active  Boolean  @default(true)
+  update_at  DateTime @default(now()) @updatedAt
+  create_at  DateTime @default(now())
+
+  product Product[]
+}
+
+model Product {
+  id           String   @id @default(uuid(7))
+  name         String
+  price_satang Int
+  is_active    Boolean  @default(true)
+  image_url    String?
+  update_at    DateTime @default(now()) @updatedAt
+  create_at    DateTime @default(now())
+
+  category_id    String
+  category       Category               @relation(fields: [category_id], references: [id])
+  modifier_group ProductModifierGroup[]
+  order_item     OrderItem[]
+  recipe         Recipe[]
+}
+
+model ProductModifierGroup {
+  product_id        String
+  modifier_group_id String
+  /// order of groups within a product
+  sort_order        Int      @default(0)
+  update_at         DateTime @default(now()) @updatedAt
+  create_at         DateTime @default(now())
+
+  product        Product       @relation(fields: [product_id], references: [id])
+  modifier_group ModifierGroup @relation(fields: [modifier_group_id], references: [id])
+
+  @@id([product_id, modifier_group_id])
+  @@index([modifier_group_id])
+}
+
+model ModifierGroup {
+  id         String   @id @default(uuid(7))
+  name       String
+  /// group is required when min_select >= 1
+  min_select Int
+  max_select Int
+  is_active  Boolean  @default(true)
+  update_at  DateTime @default(now()) @updatedAt
+  create_at  DateTime @default(now())
+
+  product         ProductModifierGroup[]
+  modifier_option ModifierOption[]
+}
+
+model ModifierOption {
+  id                 String   @id @default(uuid(7))
+  name               String
+  price_delta_satang Int
+  /// order of options within a group
+  sort_order         Int      @default(0)
+  is_active          Boolean  @default(true)
+  update_at          DateTime @default(now()) @updatedAt
+  create_at          DateTime @default(now())
+
+  order_item_modifier OrderItemModifier[]
+  group_id            String
+  modifier_group      ModifierGroup       @relation(fields: [group_id], references: [id])
+
+  @@index([group_id])
+}
+
+model Order {
+  id              String    @id @default(uuid(7))
+  order_number    Int
+  status          Status    @default(OPEN)
+  subtotal_satang Int
+  discount_satang Int       @default(0)
+  total_satang    Int
+  client_order_id String    @unique
+  paid_at         DateTime?
+  update_at       DateTime  @default(now()) @updatedAt
+  create_at       DateTime  @default(now())
+
+  order_item      OrderItem[]
+  payment         Payment[]
+  stock_movement  StockMovement[]
+  cash_session_id String
+  staff_id        String
+  cash_session    CashSession     @relation(fields: [cash_session_id], references: [id])
+  staff           Staff           @relation(fields: [staff_id], references: [id])
+
+  @@unique([cash_session_id, order_number])
+  @@index([status])
+}
+
+model OrderItem {
+  id                    String   @id @default(uuid(7))
+  quantity              Int
+  unit_price_satang     Int
+  line_total_satang     Int
+  product_name_snapshot String
+  update_at             DateTime @default(now()) @updatedAt
+  create_at             DateTime @default(now())
+
+  order_item_modifier OrderItemModifier[]
+  order_id            String
+  product_id          String
+  order               Order               @relation(fields: [order_id], references: [id])
+  product             Product             @relation(fields: [product_id], references: [id])
+
+  @@index([order_id])
+}
+
+model OrderItemModifier {
+  id                 String   @id @default(uuid(7))
+  price_delta_satang Int
+  name_snapshot      String
+  update_at          DateTime @default(now()) @updatedAt
+  create_at          DateTime @default(now())
+
+  order_item_id      String
+  modifier_option_id String
+  order_item         OrderItem      @relation(fields: [order_item_id], references: [id])
+  modifier_option    ModifierOption @relation(fields: [modifier_option_id], references: [id])
+
+  @@index([order_item_id])
+}
+
+model Payment {
+  id            String      @id @default(uuid(7))
+  method        PaymentType
+  amount_satang Int
+  tender_satang Int?
+  change_satang Int?
+  /// PromptPay slip reference typed by staff (static QR, no gateway)
+  reference     String?
+  update_at     DateTime    @default(now()) @updatedAt
+  create_at     DateTime    @default(now())
+
+  marked_by_staff_id String
+  order_id           String
+  order              Order  @relation(fields: [order_id], references: [id])
+  marked_by_staff    Staff  @relation(fields: [marked_by_staff_id], references: [id])
+
+  @@index([order_id])
+}
+
+model CashSession {
+  id                   String @id @default(uuid(7))
+  opening_float_satang Int
+  counted_cash_satang  Int?
+  expect_cash_satang   Int?
+  variance_satang      Int?
+
+  open_at  DateTime  @default(now())
+  close_at DateTime?
+
+  order              Order[]
+  opened_by_staff_id String
+  close_by_staff_id  String?
+  opened_by_staff    Staff   @relation("opened_by_staff_id", fields: [opened_by_staff_id], references: [id])
+  close_by_staff     Staff?  @relation("close_by_staff_id", fields: [close_by_staff_id], references: [id])
+}
+
+model Ingredient {
+  id             String   @id @default(uuid(7))
+  name           String
+  is_active      Boolean  @default(true)
+  unit           String
+  /// hundredths of unit (x100), e.g. 25.5 -> 2550
+  stock_quantity Int
+  /// hundredths of unit (x100), e.g. 25.5 -> 2550
+  reorder_level  Int
+  update_at      DateTime @default(now()) @updatedAt
+  create_at      DateTime @default(now())
+
+  recipe         Recipe[]
+  stock_movement StockMovement[]
+}
+
+model Recipe {
+  id                String   @id @default(uuid(7))
+  /// hundredths of unit (x100), e.g. 25.5 -> 2550
+  quantity_per_unit Int
+  update_at         DateTime @default(now()) @updatedAt
+  create_at         DateTime @default(now())
+
+  product_id    String
+  ingredient_id String
+  product       Product    @relation(fields: [product_id], references: [id])
+  ingredient    Ingredient @relation(fields: [ingredient_id], references: [id])
+
+  @@unique([product_id, ingredient_id])
+  @@index([ingredient_id])
+}
+
+model StockMovement {
+  id              String              @id @default(uuid(7))
+  /// hundredths of unit (x100), e.g. 25.5 -> 2550
+  change_quantity Int
+  reason          StockMovementReason
+  note            String?
+  update_at       DateTime            @default(now()) @updatedAt
+  create_at       DateTime            @default(now())
+
+  ingredient_id String
+  order_id      String?
+  ingredient    Ingredient @relation(fields: [ingredient_id], references: [id])
+  order         Order?     @relation(fields: [order_id], references: [id])
+
+  @@index([ingredient_id, create_at])
+  @@index([order_id])
+}
