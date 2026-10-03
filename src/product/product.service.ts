@@ -1,16 +1,25 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateProductDTO } from './dto/create-product.dto.js';
 import { AuditService } from '../common/audit/audit.service.js';
 import { AuditAction } from '../generated/prisma/enums.js';
 import { UpdateProductDTO } from './dto/update-product.dto.js';
+import { StorageService } from '../storage/storage.service.js';
 
 @Injectable()
 export class ProductService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly storage: StorageService,
   ) {}
+
+  // A new photo must be one we signed an upload for (null = remove the photo)
+  private assertOwnImage(url: string | null | undefined) {
+    if (url && !this.storage.keyFromUrl(url)) {
+      throw new BadRequestException('Upload the image first');
+    }
+  }
 
   async createProduct(
     dto: CreateProductDTO,
@@ -18,6 +27,8 @@ export class ProductService {
     ip: string,
     userAgent: string,
   ) {
+    this.assertOwnImage(dto.image_url);
+
     const product = await this.prisma.product.create({
       data: {
         name: dto.name,
@@ -78,6 +89,10 @@ export class ProductService {
       },
     });
 
+    const imageChanged =
+      dto.image_url !== undefined && dto.image_url !== product.image_url;
+    if (imageChanged) this.assertOwnImage(dto.image_url);
+
     const updatedProduct = await this.prisma.product.update({
       where: {
         id: product.id,
@@ -106,6 +121,9 @@ export class ProductService {
       ipAddress: ip,
       userAgent: userAgent,
     });
+
+    // replaced or removed: drop the old file if it was ours (best-effort)
+    if (imageChanged) await this.storage.deleteByUrl(product.image_url);
 
     return updatedProduct;
   }

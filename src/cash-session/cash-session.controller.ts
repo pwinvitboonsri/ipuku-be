@@ -19,6 +19,7 @@ import { CloseSessionDTO } from './dto/close-session.dto.js';
 import { GetSessionById } from './dto/get-session-by-id.dto.js';
 import { GetSessionList } from './dto/get-session-list.dto.js';
 import { SessionListEntity } from './entity/session-list.entity.js';
+import { ShiftReportResEntity } from './entity/shift-report-res.entity.js';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('cash-session')
@@ -67,8 +68,19 @@ export class CashSessionController {
   }
 
   @Roles(Role.OWNER, Role.STAFF)
+  @Get(':id/report')
+  async getReport(@Param() dto: GetSessionById) {
+    const report = await this.cashSessionService.getReport(dto);
+
+    return new ShiftReportResEntity({
+      success: true,
+      data: report,
+    });
+  }
+
+  @Roles(Role.OWNER, Role.STAFF)
   @Get(':id')
-  async getSessionById(@Param('id') dto: GetSessionById) {
+  async getSessionById(@Param() dto: GetSessionById) {
     const session = await this.cashSessionService.getSessionById(dto);
 
     return new SessionResEntity({

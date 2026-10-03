@@ -18,6 +18,9 @@ import { GetByIdDTO } from './dto/get-by-id.dto.js';
 import { GetByProductDTO } from './dto/get-by-product.dto.js';
 import { RecipeResEntity } from './entity/recipe-res.entity.js';
 import { RecipeListEntity } from './entity/recipe-list.entity.js';
+import { CreateRecipeModifierDTO } from './dto/create-recipe-modifier.dto.js';
+import { UpdateRecipeModifierDTO } from './dto/update-recipe-modifier.dto.js';
+import { RecipeModifierResEntity } from './entity/recipe-modifier-res.entity.js';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('recipe')
@@ -27,14 +30,85 @@ export class RecipeController {
   @Roles(Role.OWNER, Role.STAFF)
   @Get('product/:productId')
   async getByProduct(@Param() dto: GetByProductDTO) {
-    const result = await this.recipeService.getByProduct(dto);
+    const [result, modifiers] = await Promise.all([
+      this.recipeService.getByProduct(dto),
+      this.recipeService.getModifiersByProduct(dto),
+    ]);
 
     return new RecipeListEntity({
       success: true,
       data: result,
+      modifiers: modifiers,
       meta: {
         total: result.length,
       },
+    });
+  }
+
+  // ── Product x option recipe lines (declared before the ':id' routes) ──
+
+  @Roles(Role.OWNER)
+  @Post('modifier/create')
+  async createModifier(@Body() dto: CreateRecipeModifierDTO, @Req() req: any) {
+    const actorStaffId = req.user.userId;
+    const ip = req.ip;
+    const userAgent = req.headers['user-agent'];
+
+    const result = await this.recipeService.createModifier(
+      dto,
+      actorStaffId,
+      ip,
+      userAgent,
+    );
+
+    return new RecipeModifierResEntity({
+      success: true,
+      data: result,
+    });
+  }
+
+  @Roles(Role.OWNER)
+  @Post('modifier/:id/update')
+  async updateModifier(
+    @Body() dto: UpdateRecipeModifierDTO,
+    @Param('id') id: string,
+    @Req() req: any,
+  ) {
+    const actorStaffId = req.user.userId;
+    const ip = req.ip;
+    const userAgent = req.headers['user-agent'];
+
+    const result = await this.recipeService.updateModifier(
+      dto,
+      id,
+      actorStaffId,
+      ip,
+      userAgent,
+    );
+
+    return new RecipeModifierResEntity({
+      success: true,
+      data: result,
+    });
+  }
+
+  @Roles(Role.OWNER)
+  @Post('modifier/:id/delete')
+  async deleteModifier(@Param('id') id: string, @Req() req: any) {
+    const actorStaffId = req.user.userId;
+    const ip = req.ip;
+    const userAgent = req.headers['user-agent'];
+
+    const result = await this.recipeService.deleteModifier(
+      id,
+      actorStaffId,
+      ip,
+      userAgent,
+    );
+
+    return new RecipeModifierResEntity({
+      success: true,
+      data: result,
     });
   }
 

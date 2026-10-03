@@ -108,7 +108,7 @@ export class OrderController {
     const ip = req.ip;
     const userAgent = req.headers['user-agent'];
 
-    const result = await this.paymentService.pay(
+    const { order, stockAlerts } = await this.paymentService.pay(
       dto,
       id,
       actorStaffId,
@@ -118,7 +118,10 @@ export class OrderController {
 
     return new OrderResEntity({
       success: true,
-      data: result,
+      data: order,
+      meta: {
+        stock_alerts: stockAlerts,
+      },
     });
   }
 

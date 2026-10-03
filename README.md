@@ -59,16 +59,28 @@ $ npm run test:cov
 
 ## Deployment
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+Hosted on [Render](https://render.com) (free, Singapore) from `render.yaml`. Postgres is Neon, images are Cloudflare R2.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+| Env | Branch | Render service | Database |
+| --- | --- | --- | --- |
+| dev | `develop` | `ipuku-api-dev` | Neon dev branch (demo data) |
+| production | `main` | `ipuku-api` | Neon prod database |
+
+- A push deploys once the GitHub `CI` workflow passes (`autoDeployTrigger: checksPass`).
+- The build runs `prisma migrate deploy`, so migrations apply on every deploy. Commit them with the code.
+- Both services run with `NODE_ENV=production` and read config only from Render env vars (see `.env.example`).
+  Secrets (`JWT_SECRET`, `HMAC_SECRET`, `BFF_KEY`) are different per env; `HMAC_SECRET` and `BFF_KEY` must match the frontend of the same env.
+- Free instances sleep after 15 idle minutes (~1 min to wake). `.github/workflows/keep-warm.yml` pings prod `/health`
+  during shop hours (repo secret `PROD_API_URL`).
+
+### First owner on a fresh database
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npm run build
+NODE_ENV=production node --env-file=.env.production dist/scripts/create-owner.js --name <name>
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+`.env.production` (git-ignored) holds the prod values. The PIN is asked for on the terminal.
 
 ## Observability
 

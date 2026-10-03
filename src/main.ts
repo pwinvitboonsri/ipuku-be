@@ -6,9 +6,13 @@ import {
   VersioningType,
 } from '@nestjs/common';
 import { PrismaExceptionFilter } from './common/filter/prisma-exception.filter.js';
+import { NestExpressApplication } from '@nestjs/platform-express';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // behind the host's load balancer (Render): req.ip = the real caller, not the proxy
+  app.set('trust proxy', 1);
 
   app.enableVersioning({
     type: VersioningType.URI,

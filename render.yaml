@@ -1,0 +1,76 @@
+# Render Blueprint: develop -> ipuku-api-dev, main -> ipuku-api (Singapore, next to Neon).
+# Secrets are `sync: false`: Render asks for them when the Blueprint is created; set them per service.
+services:
+  - type: web
+    name: ipuku-api-dev
+    runtime: node
+    region: singapore
+    plan: free
+    branch: develop
+    autoDeployTrigger: checksPass
+    # devDependencies hold the Nest CLI and Prisma; NODE_ENV=production would skip them.
+    # Free plan has no preDeployCommand, so migrations run at the end of the build.
+    buildCommand: npm ci --include=dev && npx prisma generate && npm run build && npx prisma migrate deploy
+    startCommand: node dist/main
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_EXPIRES_IN
+        value: 1d
+      - key: CORS_ORIGINS
+        value: ""
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: HMAC_SECRET
+        sync: false
+      - key: BFF_KEY
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_PUBLIC_URL
+        sync: false
+
+  - type: web
+    name: ipuku-api
+    runtime: node
+    region: singapore
+    plan: free
+    branch: main
+    autoDeployTrigger: checksPass
+    buildCommand: npm ci --include=dev && npx prisma generate && npm run build && npx prisma migrate deploy
+    startCommand: node dist/main
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_EXPIRES_IN
+        value: 1d
+      - key: CORS_ORIGINS
+        value: ""
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: HMAC_SECRET
+        sync: false
+      - key: BFF_KEY
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_PUBLIC_URL
+        sync: false

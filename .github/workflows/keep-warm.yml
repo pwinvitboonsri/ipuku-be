@@ -1,0 +1,17 @@
+name: Keep prod API warm
+
+# Render free instances sleep after 15 idle minutes and take ~1 min to wake.
+# Ping during shop hours (10:00-18:00 ICT) from 09:45; outside them it may sleep.
+# Cron is UTC (ICT = UTC+7). GitHub may delay scheduled runs by a few minutes.
+on:
+  schedule:
+    - cron: '45,55 2 * * *'
+    - cron: '*/10 3-10 * * *'
+    - cron: '0 11 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -fsS --retry 3 --retry-delay 10 --max-time 90 "${{ secrets.PROD_API_URL }}/health"

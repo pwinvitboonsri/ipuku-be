@@ -1,13 +1,15 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditService } from '../common/audit/audit.service.js';
-import {
-  AuditAction,
-  StockMovementReason,
-} from '../generated/prisma/enums.js';
+import { AuditAction, StockMovementReason } from '../generated/prisma/enums.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { AdjustStockDTO } from './dto/adjust-stock.dto.js';
 import { GetStockMovementListDTO } from './dto/get-stock-movement-list.dto.js';
+import { loadIngredientRequirements } from './function/ingredient-requirements.function.js';
+import {
+  type DeductedIngredient,
+  stockAlertsAfterSale,
+} from './function/stock-alerts.function.js';
 
 const ingredientSelect = {
   id: true,
@@ -51,35 +53,32 @@ export class StockMovementService {
 
   // Runs inside the payment transaction. Stock may go negative:
   // a sale is never blocked at the counter.
+  // Base recipe + the options actually sold (product x option recipes), summed
+  // across the whole order: one SALE movement per ingredient.
+  // Returns the ingredients this sale just took to/below reorder level or out.
   async deductForOrder(
     tx: Prisma.TransactionClient,
     order: {
       id: string;
-      order_item: { product_id: string; quantity: number }[];
+      order_item: {
+        product_id: string;
+        quantity: number;
+        order_item_modifier: { modifier_option_id: string }[];
+      }[];
     },
   ) {
-    const productIds = [...new Set(order.order_item.map((i) => i.product_id))];
+    const totalByIngredient = await loadIngredientRequirements(
+      tx,
+      order.order_item.map((item) => ({
+        product_id: item.product_id,
+        quantity: item.quantity,
+        modifier_option_ids: item.order_item_modifier.map(
+          (m) => m.modifier_option_id,
+        ),
+      })),
+    );
 
-    const recipes = await tx.recipe.findMany({
-      where: {
-        product_id: { in: productIds },
-      },
-    });
-
-    const totalByIngredient = new Map<string, number>();
-
-    for (const item of order.order_item) {
-      for (const recipe of recipes) {
-        if (recipe.product_id !== item.product_id) continue;
-
-        totalByIngredient.set(
-          recipe.ingredient_id,
-          (totalByIngredient.get(recipe.ingredient_id) ?? 0) +
-            recipe.quantity_per_unit * item.quantity,
-        );
-      }
-    }
-
+    const deducted: DeductedIngredient[] = [];
     for (const [ingredientId, total] of totalByIngredient) {
       await tx.stockMovement.create({
         data: {
@@ -90,7 +89,9 @@ export class StockMovementService {
         },
       });
 
-      await tx.ingredient.update({
+      // the atomic decrement's result is the true stock after this sale,
+      // even with two tills paying at once
+      const updated = await tx.ingredient.update({
         where: {
           id: ingredientId,
         },
@@ -98,7 +99,10 @@ export class StockMovementService {
           stock_quantity: { decrement: total },
         },
       });
+      deducted.push({ ...updated, used: total });
     }
+
+    return stockAlertsAfterSale(deducted);
   }
 
   async adjust(

@@ -9,9 +9,10 @@ export class UpdateProductDTO {
   @IsNumber()
   price_satang?: number;
 
+  // an uploaded image's public_url, or null to remove the photo
   @IsOptional()
   @IsString()
-  image_url?: string;
+  image_url?: string | null;
 
   @IsOptional()
   @IsUUID()

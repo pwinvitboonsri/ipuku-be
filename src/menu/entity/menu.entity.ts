@@ -1,3 +1,5 @@
+import type { ProductStock } from '../function/product-stock.function.js';
+
 export class MenuOptionEntity {
   id: string;
   name: string;
@@ -10,6 +12,8 @@ export class MenuProductEntity {
   name: string;
   price_satang: number;
   image_url: string | null;
+  // from the base recipe: OK / LOW / OUT (warn only, still sellable)
+  stock: ProductStock;
   modifier_group: {
     sort_order: number;
     modifier_group: {

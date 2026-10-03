@@ -1,30 +1,18 @@
+import { Type } from 'class-transformer';
 import {
-  IsEnum,
-  IsInt,
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  MaxLength,
-  Min,
-  ValidateIf,
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
+  ValidateNested,
 } from 'class-validator';
-import { PaymentType } from '../../generated/prisma/enums.js';
+import { PayTenderDTO } from './pay-tender.dto.js';
 
 export class PayOrderDTO {
-  @IsNotEmpty()
-  @IsEnum(PaymentType)
-  method: PaymentType;
-
-  // cash handed over by the customer (satang), required for CASH
-  @ValidateIf((dto: PayOrderDTO) => dto.method === PaymentType.CASH)
-  @IsNotEmpty()
-  @IsInt()
-  @Min(0)
-  tender_satang?: number;
-
-  // PromptPay slip reference (static QR, confirmed by staff)
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  reference?: string;
+  // one tender for a normal payment, several for a mixed one; must add up to the order total
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(5)
+  @ValidateNested({ each: true })
+  @Type(() => PayTenderDTO)
+  payments: PayTenderDTO[];
 }

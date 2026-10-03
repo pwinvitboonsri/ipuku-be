@@ -2,14 +2,11 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditService } from '../common/audit/audit.service.js';
 import { StockMovementService } from '../stock-movement/stock-movement.service.js';
-import {
-  AuditAction,
-  PaymentType,
-  Status,
-} from '../generated/prisma/enums.js';
+import { AuditAction, Status } from '../generated/prisma/enums.js';
 import { PayOrderDTO } from './dto/pay-order.dto.js';
 import { RefundOrderDTO } from './dto/refund-order.dto.js';
 import { orderInclude } from './function/order.include.js';
+import { validateTenders } from './function/validate-tenders.function.js';
 
 @Injectable()
 export class PaymentService {
@@ -26,65 +23,65 @@ export class PaymentService {
     ip: string,
     userAgent: string,
   ) {
-    const { order, payment } = await this.prisma.$transaction(async (tx) => {
-      const order = await tx.order.findUniqueOrThrow({
-        where: {
-          id: orderId,
-        },
-        include: {
-          order_item: true,
-        },
-      });
+    const { order, payments, stockAlerts } = await this.prisma.$transaction(
+      async (tx) => {
+        const order = await tx.order.findUniqueOrThrow({
+          where: {
+            id: orderId,
+          },
+          include: {
+            // options sold on each line drive the option-aware stock deduction
+            order_item: { include: { order_item_modifier: true } },
+          },
+        });
 
-      const isCash = dto.method === PaymentType.CASH;
+        // throws before anything is written if the parts don't cover the total exactly
+        const rows = validateTenders(order.total_satang, dto.payments);
 
-      if (isCash && dto.tender_satang! < order.total_satang) {
-        throw new BadRequestException(
-          `Tender ${dto.tender_satang} is less than total ${order.total_satang}`,
-        );
-      }
+        // only one request can move OPEN -> PAID, so an order is never paid twice
+        const { count } = await tx.order.updateMany({
+          where: {
+            id: orderId,
+            status: Status.OPEN,
+          },
+          data: {
+            status: Status.PAID,
+            paid_at: new Date(),
+          },
+        });
 
-      // only one request can move OPEN -> PAID, so an order is never paid twice
-      const { count } = await tx.order.updateMany({
-        where: {
-          id: orderId,
-          status: Status.OPEN,
-        },
-        data: {
-          status: Status.PAID,
-          paid_at: new Date(),
-        },
-      });
+        if (count === 0) {
+          throw new BadRequestException(
+            `Order is not OPEN (current: ${order.status})`,
+          );
+        }
 
-      if (count === 0) {
-        throw new BadRequestException(
-          `Order is not OPEN (current: ${order.status})`,
-        );
-      }
+        // one by one, so rows keep the tender order (orderInclude sorts by create_at)
+        const payments = [];
+        for (const row of rows) {
+          payments.push(
+            await tx.payment.create({
+              data: {
+                ...row,
+                order_id: orderId,
+                marked_by_staff_id: actorStaffId,
+              },
+            }),
+          );
+        }
 
-      const payment = await tx.payment.create({
-        data: {
-          order_id: orderId,
-          method: dto.method,
-          amount_satang: order.total_satang,
-          tender_satang: isCash ? dto.tender_satang : null,
-          change_satang: isCash ? dto.tender_satang! - order.total_satang : null,
-          reference: dto.reference,
-          marked_by_staff_id: actorStaffId,
-        },
-      });
+        const stockAlerts = await this.stockMovement.deductForOrder(tx, order);
 
-      await this.stockMovement.deductForOrder(tx, order);
+        const paidOrder = await tx.order.findUniqueOrThrow({
+          where: {
+            id: orderId,
+          },
+          include: orderInclude,
+        });
 
-      const paidOrder = await tx.order.findUniqueOrThrow({
-        where: {
-          id: orderId,
-        },
-        include: orderInclude,
-      });
-
-      return { order: paidOrder, payment };
-    });
+        return { order: paidOrder, payments, stockAlerts };
+      },
+    );
 
     await this.audit.log({
       staffId: actorStaffId,
@@ -92,17 +89,19 @@ export class PaymentService {
       entityType: 'Order',
       entityId: orderId,
       metadata: {
-        method: payment.method,
-        amount_satang: payment.amount_satang,
-        tender_satang: payment.tender_satang,
-        change_satang: payment.change_satang,
-        reference: payment.reference,
+        payments: payments.map((p) => ({
+          method: p.method,
+          amount_satang: p.amount_satang,
+          tender_satang: p.tender_satang,
+          change_satang: p.change_satang,
+          reference: p.reference,
+        })),
       },
       ipAddress: ip,
       userAgent: userAgent,
     });
 
-    return order;
+    return { order, stockAlerts };
   }
 
   async refund(
@@ -112,14 +111,14 @@ export class PaymentService {
     ip: string,
     userAgent: string,
   ) {
-    const { order, refund } = await this.prisma.$transaction(async (tx) => {
+    const { order, refunds } = await this.prisma.$transaction(async (tx) => {
       const order = await tx.order.findUniqueOrThrow({
         where: {
           id: orderId,
         },
         include: {
           cash_session: true,
-          payment: true,
+          payment: { orderBy: { create_at: 'asc' } },
         },
       });
 
@@ -150,17 +149,21 @@ export class PaymentService {
         throw new BadRequestException('Order was already refunded');
       }
 
-      const original = order.payment.find((p) => p.amount_satang > 0)!;
-
-      // negative row: closeSession's cash sum drops automatically
-      const refund = await tx.payment.create({
-        data: {
-          order_id: orderId,
-          method: original.method,
-          amount_satang: -original.amount_satang,
-          marked_by_staff_id: actorStaffId,
-        },
-      });
+      // one negative row per tender, same method: the cash part comes out of the
+      // drawer (closeSession's cash sum drops), the PromptPay part is transferred back
+      const refunds = [];
+      for (const p of order.payment.filter((p) => p.amount_satang > 0)) {
+        refunds.push(
+          await tx.payment.create({
+            data: {
+              order_id: orderId,
+              method: p.method,
+              amount_satang: -p.amount_satang,
+              marked_by_staff_id: actorStaffId,
+            },
+          }),
+        );
+      }
 
       const refundedOrder = await tx.order.findUniqueOrThrow({
         where: {
@@ -169,7 +172,7 @@ export class PaymentService {
         include: orderInclude,
       });
 
-      return { order: refundedOrder, refund };
+      return { order: refundedOrder, refunds };
     });
 
     await this.audit.log({
@@ -179,8 +182,10 @@ export class PaymentService {
       entityId: orderId,
       metadata: {
         reason: dto.reason,
-        method: refund.method,
-        amount_satang: refund.amount_satang,
+        payments: refunds.map((r) => ({
+          method: r.method,
+          amount_satang: r.amount_satang,
+        })),
       },
       ipAddress: ip,
       userAgent: userAgent,

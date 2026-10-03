@@ -32,6 +32,13 @@ export class AuthService {
     });
   }
 
+  // Back office: every staff member, active or not (owners first, then by name)
+  async getAll() {
+    return await this.prisma.staff.findMany({
+      orderBy: [{ role: 'asc' }, { name: 'asc' }],
+    });
+  }
+
   async me(staffId: string) {
     const me = await this.prisma.staff.findFirstOrThrow({
       where: {

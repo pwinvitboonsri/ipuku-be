@@ -21,11 +21,17 @@ import { CreateProductDTO } from './dto/create-product.dto.js';
 import { ProductResEntity } from './entity/product-res.entity.js';
 import { ProductResListEntity } from './entity/product-res-list.entity.js';
 import { UpdateProductDTO } from './dto/update-product.dto.js';
+import { ImageUploadDTO } from './dto/image-upload.dto.js';
+import { ImageUploadResEntity } from './entity/image-upload-res.entity.js';
+import { StorageService } from '../storage/storage.service.js';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('product')
 export class ProductController {
-  constructor(private readonly productService: ProductService) {}
+  constructor(
+    private readonly productService: ProductService,
+    private readonly storage: StorageService,
+  ) {}
 
   @Roles(Role.OWNER, Role.STAFF)
   @Get('list')
@@ -43,7 +49,7 @@ export class ProductController {
     });
   }
 
-  @Roles(Role.OWNER, Role.STAFF)
+  @Roles(Role.OWNER)
   @Post('create')
   async createProduct(@Body() dto: CreateProductDTO, @Req() req: any) {
     const actorStaffId = req.user.userId;
@@ -60,6 +66,21 @@ export class ProductController {
     return new ProductResEntity({
       success: true,
       data: product,
+    });
+  }
+
+  // Signs a one-time direct upload to R2; same roles as create, since a new product needs a photo too
+  @Roles(Role.OWNER, Role.STAFF)
+  @Post('image-upload')
+  async imageUpload(@Body() dto: ImageUploadDTO) {
+    const data = await this.storage.presignProductImage(
+      dto.content_type,
+      dto.size,
+    );
+
+    return new ImageUploadResEntity({
+      success: true,
+      data,
     });
   }
 

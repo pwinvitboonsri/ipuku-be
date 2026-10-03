@@ -164,9 +164,18 @@ export class ProductModifierGroupService {
       where: key,
     });
 
-    const result = await this.prisma.productModifierGroup.delete({
-      where: key,
-    });
+    // Option recipe lines for this product and group can no longer be sold — drop them with the link
+    const [removedRecipeLines, result] = await this.prisma.$transaction([
+      this.prisma.recipeModifier.deleteMany({
+        where: {
+          product_id: dto.product_id,
+          modifier_option: { group_id: dto.modifier_group_id },
+        },
+      }),
+      this.prisma.productModifierGroup.delete({
+        where: key,
+      }),
+    ]);
 
     await this.audit.log({
       staffId: actorStaffId,
@@ -179,6 +188,7 @@ export class ProductModifierGroupService {
           modifier_group_id: result.modifier_group_id,
           sort_order: result.sort_order,
         },
+        removed_recipe_modifier_count: removedRecipeLines.count,
       },
       ipAddress: ip,
       userAgent: userAgent,

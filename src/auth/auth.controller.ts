@@ -40,6 +40,17 @@ export class AuthController {
     return new GetUserEntity({ user: result, total: result.length });
   }
 
+  // Back office staff list: includes role and inactive staff (GET /auth is the login grid)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.OWNER)
+  @Get('staff')
+  async getAll() {
+    const staffList = await this.authService.getAll();
+    const result = staffList.map((staff) => new StaffEntity(staff));
+
+    return { staff: result, total: result.length };
+  }
+
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async me(@Req() req: any) {

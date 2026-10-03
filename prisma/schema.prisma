@@ -72,6 +72,10 @@ enum AuditAction {
   UPDATE_RECIPE
   DELETE_RECIPE
 
+  CREATE_RECIPE_MODIFIER
+  UPDATE_RECIPE_MODIFIER
+  DELETE_RECIPE_MODIFIER
+
   CREATE_MODIFIER_GROUP
   UPDATE_MODIFIER_GROUP
   ACTIVE_MODIFIER_GROUP
@@ -149,11 +153,12 @@ model Product {
   update_at    DateTime @default(now()) @updatedAt
   create_at    DateTime @default(now())
 
-  category_id    String
-  category       Category               @relation(fields: [category_id], references: [id])
-  modifier_group ProductModifierGroup[]
-  order_item     OrderItem[]
-  recipe         Recipe[]
+  category_id     String
+  category        Category               @relation(fields: [category_id], references: [id])
+  modifier_group  ProductModifierGroup[]
+  order_item      OrderItem[]
+  recipe          Recipe[]
+  recipe_modifier RecipeModifier[]
 }
 
 model ProductModifierGroup {
@@ -196,6 +201,7 @@ model ModifierOption {
   create_at          DateTime @default(now())
 
   order_item_modifier OrderItemModifier[]
+  recipe_modifier     RecipeModifier[]
   group_id            String
   modifier_group      ModifierGroup       @relation(fields: [group_id], references: [id])
 
@@ -307,8 +313,9 @@ model Ingredient {
   update_at      DateTime @default(now()) @updatedAt
   create_at      DateTime @default(now())
 
-  recipe         Recipe[]
-  stock_movement StockMovement[]
+  recipe          Recipe[]
+  recipe_modifier RecipeModifier[]
+  stock_movement  StockMovement[]
 }
 
 model Recipe {
@@ -324,6 +331,28 @@ model Recipe {
   ingredient    Ingredient @relation(fields: [ingredient_id], references: [id])
 
   @@unique([product_id, ingredient_id])
+  @@index([ingredient_id])
+}
+
+/// What a modifier option adds to (or takes from) a product's base recipe when sold.
+/// Keyed by product × option × ingredient: the same option ("Large") means different
+/// ingredients on different products.
+model RecipeModifier {
+  id             String   @id @default(uuid(7))
+  /// hundredths of unit (x100); may be negative, e.g. Oat milk on a latte: whole milk -18000
+  quantity_delta Int
+  update_at      DateTime @default(now()) @updatedAt
+  create_at      DateTime @default(now())
+
+  product_id         String
+  modifier_option_id String
+  ingredient_id      String
+  product            Product        @relation(fields: [product_id], references: [id])
+  modifier_option    ModifierOption @relation(fields: [modifier_option_id], references: [id])
+  ingredient         Ingredient     @relation(fields: [ingredient_id], references: [id])
+
+  @@unique([product_id, modifier_option_id, ingredient_id])
+  @@index([product_id])
   @@index([ingredient_id])
 }
 
