@@ -70,8 +70,8 @@ Hosted on [Render](https://render.com) (free, Singapore) from `render.yaml`. Pos
 - The build runs `prisma migrate deploy`, so migrations apply on every deploy. Commit them with the code.
 - Both services run with `NODE_ENV=production` and read config only from Render env vars (see `.env.example`).
   Secrets (`JWT_SECRET`, `HMAC_SECRET`, `BFF_KEY`) are different per env; `HMAC_SECRET` and `BFF_KEY` must match the frontend of the same env.
-- Free instances sleep after 15 idle minutes (~1 min to wake). `.github/workflows/keep-warm.yml` pings prod `/health`
-  during shop hours (repo secret `PROD_API_URL`).
+- Free instances sleep after 15 idle minutes (~1 min to wake). A Cloudflare Worker with cron triggers (`ops/keep-warm/`)
+  pings prod `/health` during shop hours. Deploy it with `cd ops/keep-warm && npx wrangler deploy`.
 
 ### First owner on a fresh database
 

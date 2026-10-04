@@ -1,0 +1,13 @@
+// Deploy: cd ops/keep-warm && npx wrangler deploy
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "ipuku-keep-warm",
+  "main": "index.ts",
+  "compatibility_date": "2026-10-01",
+  // no public URL: the worker only runs on its schedule
+  "workers_dev": false,
+  "vars": { "API_URL": "https://ipuku-api.onrender.com" },
+  // UTC (Thailand = UTC+7): every 10 min from 09:45 to 18:00 Thailand time (shop hours 10:00-18:00)
+  "triggers": { "crons": ["45,55 2 * * *", "*/10 3-10 * * *", "0 11 * * *"] },
+  "observability": { "enabled": true }
+}
