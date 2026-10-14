@@ -1,5 +1,5 @@
 import { IsEnum, IsOptional, IsUUID } from 'class-validator';
-import { Status } from '../../generated/prisma/enums.js';
+import { OrderChannel, Status } from '../../generated/prisma/enums.js';
 
 export class GetOrderListDTO {
   // defaults to the current open cash session
@@ -10,4 +10,8 @@ export class GetOrderListDTO {
   @IsOptional()
   @IsEnum(Status)
   status?: Status;
+
+  @IsOptional()
+  @IsEnum(OrderChannel)
+  channel?: OrderChannel;
 }

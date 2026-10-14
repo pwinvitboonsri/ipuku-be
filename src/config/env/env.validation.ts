@@ -30,4 +30,22 @@ export const envValidationSchema = Joi.object({
     R2_BUCKET_NAME: Joi.string().allow('').optional(),
     // public base of the bucket (r2.dev subdomain or custom domain), e.g. https://img.example.com
     R2_PUBLIC_URL: Joi.string().uri({ scheme: ['https'] }).allow('').optional(),
+
+    // GrabFood Partner API; off by default. mock = outbound calls are only logged
+    GRAB_ENABLED: Joi.boolean().default(false),
+    GRAB_MODE: Joi.string().valid('mock', 'staging', 'production').default('mock'),
+    GRAB_CLIENT_ID: Joi.string().allow('').optional(),
+    GRAB_CLIENT_SECRET: Joi.string().allow('').optional(),
+    GRAB_AUTH_URL: Joi.string().uri({ scheme: ['https'] }).allow('').optional(),
+    GRAB_API_BASE_URL: Joi.string().uri({ scheme: ['https'] }).allow('').optional(),
+    GRAB_PARTNER_CLIENT_ID: Joi.string().allow('').optional(),
+    GRAB_PARTNER_CLIENT_SECRET: Joi.string().allow('').optional(),
+    GRAB_WEBHOOK_JWT_SECRET: Joi.string().min(32).allow('').optional(),
+    GRAB_MERCHANT_ID: Joi.string().allow('').optional(),
+    GRAB_SYSTEM_STAFF_ID: Joi.string().uuid().allow('').optional(),
+
+    // Web Push (npx web-push generate-vapid-keys); empty = push off
+    VAPID_PUBLIC_KEY: Joi.string().allow('').optional(),
+    VAPID_PRIVATE_KEY: Joi.string().allow('').optional(),
+    VAPID_SUBJECT: Joi.string().pattern(/^(mailto:|https:)/).allow('').optional(),
 })

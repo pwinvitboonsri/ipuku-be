@@ -1,5 +1,5 @@
 import {
-  IsEnum,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -12,8 +12,9 @@ import { PaymentType } from '../../generated/prisma/enums.js';
 
 // One part of a payment. A mixed payment is several of these (e.g. PromptPay + cash).
 export class PayTenderDTO {
+  // GRAB is only written by the Grab webhook, never taken at the counter
   @IsNotEmpty()
-  @IsEnum(PaymentType)
+  @IsIn([PaymentType.CASH, PaymentType.PROMPTPAY])
   method: PaymentType;
 
   // the part of the order total this tender covers (satang)

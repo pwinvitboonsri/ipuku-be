@@ -1,0 +1,48 @@
+{
+  "orderID": "123-CYNKLPCVRN5",
+  "shortOrderNumber": "GF-123",
+  "merchantID": "1-CYNGRUNGSBCCC",
+  "partnerMerchantID": "ipuku",
+  "paymentType": "CASHLESS",
+  "cutlery": false,
+  "orderTime": "2026-10-14T09:00:00Z",
+  "submitTime": "2026-10-14T09:00:05Z",
+  "orderState": "",
+  "items": [
+    {
+      "id": "00000000-0000-7000-8000-000000000001",
+      "grabItemID": "THITE2019",
+      "quantity": 2,
+      "price": 7500,
+      "tax": 0,
+      "specifications": "less ice",
+      "modifiers": [
+        { "id": "00000000-0000-7000-8000-000000000011", "price": 1000, "tax": 0, "quantity": 1 }
+      ]
+    },
+    {
+      "id": "00000000-0000-7000-8000-000000000002",
+      "grabItemID": "THITE2020",
+      "quantity": 1,
+      "price": 5000,
+      "tax": 0,
+      "specifications": "",
+      "modifiers": []
+    }
+  ],
+  "campaigns": [],
+  "promos": [],
+  "price": {
+    "subtotal": 20000,
+    "tax": 0,
+    "merchantChargeFee": 0,
+    "grabFundPromo": 0,
+    "merchantFundPromo": 0,
+    "basketPromo": 0,
+    "deliveryFee": 1500,
+    "eaterPayment": 21500
+  },
+  "receiver": { "name": "Test Customer", "phones": "", "address": { "address": "" } },
+  "orderReadyEstimation": { "allowChange": false, "estimatedOrderReadyTime": "", "maxOrderReadyTime": "" },
+  "featureFlags": { "orderAcceptedType": "MANUAL", "orderType": "DeliveredByGrab" }
+}

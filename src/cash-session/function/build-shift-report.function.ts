@@ -6,7 +6,7 @@
 // full-order only: one negative row per tender, same method, order -> REFUNDED.
 // So net sales = Σ total of PAID orders.
 
-type Method = 'CASH' | 'PROMPTPAY';
+type Method = 'CASH' | 'PROMPTPAY' | 'GRAB';
 type OrderStatus = 'OPEN' | 'PAID' | 'VOIDED' | 'REFUNDED';
 
 export type ReportSessionInput = {
@@ -145,7 +145,8 @@ export type ShiftReport = {
   hourly: { hour_start: Date; orders: number; net_sales_satang: number }[];
 };
 
-const METHODS: Method[] = ['CASH', 'PROMPTPAY'];
+// GRAB is settled by Grab later, so it never counts toward the drawer
+const METHODS: Method[] = ['CASH', 'PROMPTPAY', 'GRAB'];
 const HOUR_MS = 3_600_000;
 
 const reasonOf = (metadata: unknown): string | null => {

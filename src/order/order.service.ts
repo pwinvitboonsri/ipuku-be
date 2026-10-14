@@ -1,7 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditService } from '../common/audit/audit.service.js';
-import { AuditAction, Status } from '../generated/prisma/enums.js';
+import {
+  AuditAction,
+  OrderChannel,
+  Status,
+} from '../generated/prisma/enums.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { CreateOrderDTO } from './dto/create-order.dto.js';
 import { VoidOrderDTO } from './dto/void-order.dto.js';
@@ -44,6 +48,9 @@ export class OrderService {
         ...(dto.status && {
           status: dto.status,
         }),
+        ...(dto.channel && {
+          channel: dto.channel,
+        }),
       },
       include: orderInclude,
       orderBy: {
@@ -66,12 +73,15 @@ export class OrderService {
     actorStaffId: string,
     ip: string,
     userAgent: string,
+    // set by the Grab webhook; the POS endpoint always creates WALK_IN orders
+    channel: OrderChannel = OrderChannel.WALK_IN,
   ) {
     for (let attempt = 1; ; attempt++) {
       try {
         const { order, created } = await this.createInTransaction(
           dto,
           actorStaffId,
+          channel,
         );
 
         if (created) {
@@ -83,6 +93,7 @@ export class OrderService {
             metadata: {
               createData: {
                 order_number: order.order_number,
+                channel: order.channel,
                 total_satang: order.total_satang,
                 item_count: order.order_item.length,
               },
@@ -115,7 +126,11 @@ export class OrderService {
     }
   }
 
-  private async createInTransaction(dto: CreateOrderDTO, actorStaffId: string) {
+  private async createInTransaction(
+    dto: CreateOrderDTO,
+    actorStaffId: string,
+    channel: OrderChannel,
+  ) {
     return await this.prisma.$transaction(async (tx) => {
       const existing = await tx.order.findUnique({
         where: {
@@ -183,6 +198,7 @@ export class OrderService {
           subtotal_satang: subtotalSatang,
           discount_satang: discountSatang,
           total_satang: subtotalSatang - discountSatang,
+          channel,
           client_order_id: dto.client_order_id,
           cash_session_id: session.id,
           staff_id: actorStaffId,

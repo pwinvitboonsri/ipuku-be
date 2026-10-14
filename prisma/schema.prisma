@@ -27,6 +27,13 @@ enum Status {
 enum PaymentType {
   CASH
   PROMPTPAY
+  /// collected by Grab, settled to the shop later; never in the drawer
+  GRAB
+}
+
+enum OrderChannel {
+  WALK_IN
+  GRAB
 }
 
 enum StockMovementReason {
@@ -91,6 +98,11 @@ enum AuditAction {
   DETACH_MODIFIER_GROUP
 
   STOCK_ADJUSTMENT
+
+  GRAB_ORDER_RECEIVED
+  GRAB_ORDER_REJECTED
+  GRAB_ORDER_CANCELLED
+  GRAB_ORDER_ACKNOWLEDGED
 }
 
 model Staff {
@@ -102,11 +114,13 @@ model Staff {
   update_at DateTime @default(now()) @updatedAt
   create_at DateTime @default(now())
 
-  order           Order[]
-  payment         Payment[]
-  audit_log       AuditLog[]
-  opened_by_staff CashSession[] @relation("opened_by_staff_id")
-  close_by_staff  CashSession[] @relation("close_by_staff_id")
+  order             Order[]
+  payment           Payment[]
+  audit_log         AuditLog[]
+  push_subscription PushSubscription[]
+  grab_order_ack    GrabOrder[]
+  opened_by_staff   CashSession[]      @relation("opened_by_staff_id")
+  close_by_staff    CashSession[]      @relation("close_by_staff_id")
 }
 
 model AuditLog {
@@ -209,20 +223,22 @@ model ModifierOption {
 }
 
 model Order {
-  id              String    @id @default(uuid(7))
+  id              String       @id @default(uuid(7))
   order_number    Int
-  status          Status    @default(OPEN)
+  status          Status       @default(OPEN)
+  channel         OrderChannel @default(WALK_IN)
   subtotal_satang Int
-  discount_satang Int       @default(0)
+  discount_satang Int          @default(0)
   total_satang    Int
-  client_order_id String    @unique
+  client_order_id String       @unique
   paid_at         DateTime?
-  update_at       DateTime  @default(now()) @updatedAt
-  create_at       DateTime  @default(now())
+  update_at       DateTime     @default(now()) @updatedAt
+  create_at       DateTime     @default(now())
 
   order_item      OrderItem[]
   payment         Payment[]
   stock_movement  StockMovement[]
+  grab_order      GrabOrder?
   cash_session_id String
   staff_id        String
   cash_session    CashSession     @relation(fields: [cash_session_id], references: [id])
@@ -230,6 +246,7 @@ model Order {
 
   @@unique([cash_session_id, order_number])
   @@index([status])
+  @@index([channel])
 }
 
 model OrderItem {
@@ -372,4 +389,45 @@ model StockMovement {
 
   @@index([ingredient_id, create_at])
   @@index([order_id])
+}
+
+/// One GrabFood order as received from the Grab webhook. order_id is null when we rejected it.
+model GrabOrder {
+  id                   String    @id @default(uuid(7))
+  /// Grab's orderID; the idempotency key for webhook retries
+  grab_order_id        String    @unique
+  short_order_number   String
+  merchant_id          String
+  /// latest state pushed by Grab (e.g. DRIVER_ALLOCATED, COLLECTED, CANCELLED)
+  state                String
+  grab_subtotal_satang Int
+  raw_payload          Json
+  rejected_reason      String?
+  acknowledged_at      DateTime?
+  update_at            DateTime  @default(now()) @updatedAt
+  create_at            DateTime  @default(now())
+
+  order_id                 String? @unique
+  order                    Order?  @relation(fields: [order_id], references: [id])
+  acknowledged_by_staff_id String?
+  acknowledged_by_staff    Staff?  @relation(fields: [acknowledged_by_staff_id], references: [id])
+
+  @@index([acknowledged_at])
+}
+
+/// A device (browser) that gets Web Push alerts, e.g. new Grab orders
+model PushSubscription {
+  id              String    @id @default(uuid(7))
+  endpoint        String    @unique
+  p256dh          String
+  auth            String
+  user_agent      String?
+  last_success_at DateTime?
+  update_at       DateTime  @default(now()) @updatedAt
+  create_at       DateTime  @default(now())
+
+  staff_id String
+  staff    Staff  @relation(fields: [staff_id], references: [id])
+
+  @@index([staff_id])
 }

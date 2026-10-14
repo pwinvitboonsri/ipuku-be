@@ -7,5 +7,7 @@ import { MenuController } from './menu.controller.js';
   imports: [PassportModule.register({ defaultStrategy: 'jwt' })],
   controllers: [MenuController],
   providers: [MenuService],
+  // the grab module serves the same menu to Grab
+  exports: [MenuService],
 })
 export class MenuModule {}

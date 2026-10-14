@@ -138,6 +138,7 @@ describe('buildShiftReport', () => {
     expect(r.tenders).toEqual([
       { method: 'CASH', count: 3, sales_satang: 25500, refunds_satang: 5000, net_satang: 20500 },
       { method: 'PROMPTPAY', count: 1, sales_satang: 11500, refunds_satang: 0, net_satang: 11500 },
+      { method: 'GRAB', count: 0, sales_satang: 0, refunds_satang: 0, net_satang: 0 },
     ]);
     // open session: expected computed live, nothing counted yet
     expect(r.cash).toEqual({
@@ -243,6 +244,7 @@ describe('buildShiftReport', () => {
       // cash: 3 earlier + 2 split parts; refunds: 5000 earlier + 8000 split part
       { method: 'CASH', count: 5, sales_satang: 25500 + 16000, refunds_satang: 13000, net_satang: 28500 },
       { method: 'PROMPTPAY', count: 3, sales_satang: 11500 + 24000, refunds_satang: 12000, net_satang: 23500 },
+      { method: 'GRAB', count: 0, sales_satang: 0, refunds_satang: 0, net_satang: 0 },
     ]);
     // only the cash part of the kept split order lands in the drawer
     expect(r.cash.expected_satang).toBe(100000 + 20500 + 8000);
@@ -267,5 +269,22 @@ describe('buildShiftReport', () => {
     expect(r.session.first_order_number).toBeNull();
     expect(r.items).toEqual([]);
     expect(r.hourly).toEqual([]);
+  });
+
+  it('reports Grab sales as their own tender and keeps them out of the drawer', () => {
+    const { orders, audit } = fixture();
+    const grab = order({
+      order_item: [latte(2)],
+      payment: [{ method: 'GRAB', amount_satang: 13000, tender_satang: null, change_satang: null, create_at: t('02:50') }],
+    });
+    const r = buildShiftReport(session(), [...orders, grab], audit);
+
+    expect(r.tenders.find((l) => l.method === 'GRAB')).toEqual({
+      method: 'GRAB', count: 1, sales_satang: 13000, refunds_satang: 0, net_satang: 13000,
+    });
+    expect(r.summary.net_sales_satang).toBe(32000 + 13000);
+    // same drawer as without the Grab order
+    expect(r.cash.cash_sales_satang).toBe(25500);
+    expect(r.cash.expected_satang).toBe(100000 + 20500);
   });
 });

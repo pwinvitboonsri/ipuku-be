@@ -4,6 +4,8 @@ import { envValidationSchema } from './config/env/env.validation.js';
 import dbConfig from './config/env/db.config.js';
 import jwtConfig from './config/env/jwt.config.js';
 import r2Config from './config/env/r2.config.js';
+import grabConfig from './config/env/grab.config.js';
+import pushConfig from './config/env/push.config.js';
 import { EnvCheckService } from './config/env/env-check.service.js';
 import { AuthModule } from './auth/auth.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
@@ -20,6 +22,8 @@ import { ModifierModule } from './modifier/modifier.module.js';
 import { OrderModule } from './order/order.module.js';
 import { StockMovementModule } from './stock-movement/stock-movement.module.js';
 import { MenuModule } from './menu/menu.module.js';
+import { PushModule } from './push/push.module.js';
+import { GrabModule } from './grab/grab.module.js';
 
 @Module({
   imports: [
@@ -28,7 +32,7 @@ import { MenuModule } from './menu/menu.module.js';
       ignoreEnvFile: process.env.NODE_ENV === 'production',
       envFilePath: `.env.${process.env.NODE_ENV || 'development'}`,
       validationSchema: envValidationSchema,
-      load: [dbConfig, jwtConfig, r2Config],
+      load: [dbConfig, jwtConfig, r2Config, grabConfig, pushConfig],
       cache: true,
     }),
     ThrottlerModule.forRootAsync({
@@ -54,6 +58,8 @@ import { MenuModule } from './menu/menu.module.js';
     OrderModule,
     StockMovementModule,
     MenuModule,
+    PushModule,
+    GrabModule,
   ],
   controllers: [],
   providers: [

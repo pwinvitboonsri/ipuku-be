@@ -14,5 +14,7 @@ import { StockMovementModule } from '../stock-movement/stock-movement.module.js'
   ],
   controllers: [OrderController],
   providers: [OrderService, PaymentService],
+  // the grab module creates and pays Grab orders through the same path
+  exports: [OrderService, PaymentService],
 })
 export class OrderModule {}
