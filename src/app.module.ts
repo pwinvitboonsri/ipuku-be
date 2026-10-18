@@ -5,6 +5,7 @@ import dbConfig from './config/env/db.config.js';
 import jwtConfig from './config/env/jwt.config.js';
 import r2Config from './config/env/r2.config.js';
 import grabConfig from './config/env/grab.config.js';
+import lineConfig from './config/env/line.config.js';
 import pushConfig from './config/env/push.config.js';
 import { EnvCheckService } from './config/env/env-check.service.js';
 import { AuthModule } from './auth/auth.module.js';
@@ -24,6 +25,7 @@ import { StockMovementModule } from './stock-movement/stock-movement.module.js';
 import { MenuModule } from './menu/menu.module.js';
 import { PushModule } from './push/push.module.js';
 import { GrabModule } from './grab/grab.module.js';
+import { LineModule } from './line/line.module.js';
 
 @Module({
   imports: [
@@ -32,7 +34,7 @@ import { GrabModule } from './grab/grab.module.js';
       ignoreEnvFile: process.env.NODE_ENV === 'production',
       envFilePath: `.env.${process.env.NODE_ENV || 'development'}`,
       validationSchema: envValidationSchema,
-      load: [dbConfig, jwtConfig, r2Config, grabConfig, pushConfig],
+      load: [dbConfig, jwtConfig, r2Config, grabConfig, pushConfig, lineConfig],
       cache: true,
     }),
     ThrottlerModule.forRootAsync({
@@ -60,6 +62,7 @@ import { GrabModule } from './grab/grab.module.js';
     MenuModule,
     PushModule,
     GrabModule,
+    LineModule,
   ],
   controllers: [],
   providers: [

@@ -9,7 +9,10 @@ import { PrismaExceptionFilter } from './common/filter/prisma-exception.filter.j
 import { NestExpressApplication } from '@nestjs/platform-express';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // rawBody: LINE signs the exact webhook bytes, so the signature is checked against req.rawBody
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
 
   // behind the host's load balancer (Render): req.ip = the real caller, not the proxy
   app.set('trust proxy', 1);

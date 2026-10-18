@@ -44,6 +44,12 @@ export const envValidationSchema = Joi.object({
     GRAB_MERCHANT_ID: Joi.string().allow('').optional(),
     GRAB_SYSTEM_STAFF_ID: Joi.string().uuid().allow('').optional(),
 
+    // LINE OA + LIFF for the loyalty program; off by default
+    LINE_ENABLED: Joi.boolean().default(false),
+    LINE_CHANNEL_SECRET: Joi.string().allow('').optional(),
+    LINE_CHANNEL_ACCESS_TOKEN: Joi.string().allow('').optional(),
+    LINE_LOGIN_CHANNEL_ID: Joi.string().pattern(/^\d+$/).allow('').optional(),
+
     // Web Push (npx web-push generate-vapid-keys); empty = push off
     VAPID_PUBLIC_KEY: Joi.string().allow('').optional(),
     VAPID_PRIVATE_KEY: Joi.string().allow('').optional(),
