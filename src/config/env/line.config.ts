@@ -1,12 +1,13 @@
 import { registerAs } from "@nestjs/config";
 
 // LINE OA (Messaging API) + LIFF login. Off unless LINE_ENABLED=true.
+// Trimmed: a pasted newline/space would break the webhook signature check.
 // All three channels must sit under one LINE Provider so userIds match.
 export default registerAs('line', () => ({
     enabled: process.env.LINE_ENABLED === 'true',
     // Messaging API channel: signs webhooks, sends push/reply messages
-    channelSecret: process.env.LINE_CHANNEL_SECRET,
-    channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+    channelSecret: process.env.LINE_CHANNEL_SECRET?.trim(),
+    channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim(),
     // LINE Login channel that owns the LIFF app: audience of LIFF ID tokens
-    loginChannelId: process.env.LINE_LOGIN_CHANNEL_ID,
+    loginChannelId: process.env.LINE_LOGIN_CHANNEL_ID?.trim(),
 }))
