@@ -103,6 +103,40 @@ enum AuditAction {
   GRAB_ORDER_REJECTED
   GRAB_ORDER_CANCELLED
   GRAB_ORDER_ACKNOWLEDGED
+
+  UPDATE_LOYALTY_PROGRAM
+  CREATE_REWARD
+  UPDATE_REWARD
+  ACTIVE_REWARD
+  DEACTIVATE_REWARD
+}
+
+/// One row in the points ledger. Balances are the sum of entries; nothing is edited in place.
+enum PointsEntryType {
+  /// customer claimed a receipt QR
+  EARN
+  /// a reward code was used on a paid order
+  REDEEM
+  /// an earn or redeem undone because its order was refunded
+  REVERSAL
+}
+
+enum RewardType {
+  /// fixed baht off the order
+  FIXED_DISCOUNT
+  /// one item free, up to max_discount_satang
+  FREE_ITEM
+}
+
+enum RewardCodeStatus {
+  /// shown in LINE, holding the points until expires_at
+  ACTIVE
+  /// validated at the POS and attached to an OPEN order (points still held)
+  APPLIED
+  /// the order was paid: points deducted
+  USED
+  /// customer cancelled, or the order it was applied to was voided
+  CANCELLED
 }
 
 model Staff {
@@ -119,6 +153,8 @@ model Staff {
   audit_log         AuditLog[]
   push_subscription PushSubscription[]
   grab_order_ack    GrabOrder[]
+  points_entry      PointsEntry[]
+  loyalty_program   LoyaltyProgram[]
   opened_by_staff   CashSession[]      @relation("opened_by_staff_id")
   close_by_staff    CashSession[]      @relation("close_by_staff_id")
 }
@@ -173,6 +209,7 @@ model Product {
   order_item      OrderItem[]
   recipe          Recipe[]
   recipe_modifier RecipeModifier[]
+  reward          Reward[]
 }
 
 model ProductModifierGroup {
@@ -239,6 +276,9 @@ model Order {
   payment         Payment[]
   stock_movement  StockMovement[]
   grab_order      GrabOrder?
+  claim_token     ClaimToken?
+  reward_code     RewardCode?
+  points_entry    PointsEntry[]
   cash_session_id String
   staff_id        String
   cash_session    CashSession     @relation(fields: [cash_session_id], references: [id])
@@ -430,4 +470,170 @@ model PushSubscription {
   staff    Staff  @relation(fields: [staff_id], references: [id])
 
   @@index([staff_id])
+}
+
+/// Loyalty settings (a single row, id 1). Rule changes apply to orders paid afterwards.
+model LoyaltyProgram {
+  id                  Int      @id @default(1)
+  /// earn points_per_unit for every unit_satang of the paid total, rounded down
+  points_per_unit     Int      @default(1)
+  unit_satang         Int      @default(1000)
+  /// how long a receipt QR can be claimed after payment
+  claim_valid_hours   Int      @default(24)
+  /// how long a reward code shown in LINE stays valid (points are held meanwhile)
+  reward_code_minutes Int      @default(10)
+  /// PDPA consent text version; members who accepted an older one are asked again
+  consent_version     String   @default("2026-10-21")
+  update_at           DateTime @default(now()) @updatedAt
+
+  update_by_staff_id String?
+  update_by_staff    Staff?  @relation(fields: [update_by_staff_id], references: [id])
+}
+
+/// Anyone who added the shop OA as a friend (from follow/unfollow webhooks). Not a member until they consent.
+model LineContact {
+  line_user_id  String    @id
+  is_friend     Boolean   @default(true)
+  followed_at   DateTime?
+  unfollowed_at DateTime?
+  update_at     DateTime  @default(now()) @updatedAt
+  create_at     DateTime  @default(now())
+}
+
+/// A LINE user who accepted the PDPA consent. Shown as IPK-000042 (member_no).
+model Member {
+  id              String   @id @default(uuid(7))
+  member_no       Int      @unique @default(autoincrement())
+  /// per LINE Provider: the same person has another userId under a different Provider
+  line_user_id    String   @unique
+  /// from the LINE profile, refreshed whenever the member opens the LIFF app
+  display_name    String?
+  picture_url     String?
+  consent_version String
+  consented_at    DateTime
+  update_at       DateTime @default(now()) @updatedAt
+  create_at       DateTime @default(now())
+
+  points_entry PointsEntry[]
+  claim_token  ClaimToken[]
+  reward_code  RewardCode[]
+
+  @@index([display_name])
+}
+
+/// Append-only points ledger. Corrections happen only through refunds (REVERSAL rows).
+model PointsEntry {
+  id        String          @id @default(uuid(7))
+  type      PointsEntryType
+  /// signed: + earn, − redeem, opposite sign of the reversed entry
+  points    Int
+  note      String?
+  create_at DateTime        @default(now())
+
+  member_id      String
+  member         Member       @relation(fields: [member_id], references: [id])
+  order_id       String?
+  order          Order?       @relation(fields: [order_id], references: [id])
+  claim_token_id String?      @unique
+  claim_token    ClaimToken?  @relation(fields: [claim_token_id], references: [id])
+  reward_code_id String?      @unique
+  reward_code    RewardCode?  @relation(fields: [reward_code_id], references: [id])
+  /// staff behind a redeem or reversal; null when the customer earned through LINE
+  staff_id       String?
+  staff          Staff?       @relation(fields: [staff_id], references: [id])
+  /// the entry this one undoes; unique so an entry is reversed at most once
+  reverses_id    String?      @unique
+  reverses       PointsEntry? @relation("reversal", fields: [reverses_id], references: [id])
+  reversed_by    PointsEntry? @relation("reversal")
+
+  @@index([member_id, create_at])
+  @@index([order_id])
+  @@index([type, create_at])
+}
+
+/// One-time "scan to collect points" token for a paid walk-in order (QR on screen + receipt).
+model ClaimToken {
+  id           String    @id @default(uuid(7))
+  /// random, in the QR URL
+  token        String    @unique
+  /// 6 characters printed under the QR for manual entry
+  code         String    @unique
+  /// points this order earns, fixed at payment with the rule in force then
+  points       Int
+  total_satang Int
+  expires_at   DateTime
+  claimed_at   DateTime?
+  create_at    DateTime  @default(now())
+
+  order_id  String  @unique
+  order     Order   @relation(fields: [order_id], references: [id])
+  member_id String?
+  member    Member? @relation(fields: [member_id], references: [id])
+
+  points_entry PointsEntry?
+
+  @@index([expires_at])
+}
+
+/// Something members spend points on. Deactivating hides it; codes already issued still work until they expire.
+model Reward {
+  id                  String     @id @default(uuid(7))
+  name                String
+  cost_points         Int
+  type                RewardType
+  /// FIXED_DISCOUNT: baht off the order
+  discount_satang     Int?
+  /// FREE_ITEM: this product (any options) is free, up to max_discount_satang
+  max_discount_satang Int?
+  sort_order          Int        @default(0)
+  is_active           Boolean    @default(true)
+  update_at           DateTime   @default(now()) @updatedAt
+  create_at           DateTime   @default(now())
+
+  product_id String?
+  product    Product? @relation(fields: [product_id], references: [id])
+
+  reward_code RewardCode[]
+}
+
+/// A reward the member chose in LINE: shown as a rotating QR (code + time-based token) or the plain code.
+model RewardCode {
+  id              String           @id @default(uuid(7))
+  /// 6 characters, the fallback typed at the POS
+  code            String           @unique
+  /// secret for the rotating QR token; only the member's LIFF app gets it
+  seed            String
+  status          RewardCodeStatus @default(ACTIVE)
+  /// snapshots, so history reads right after the reward is edited
+  reward_name     String
+  cost_points     Int
+  /// discount actually given, set when applied to an order
+  discount_satang Int?
+  expires_at      DateTime
+  applied_at      DateTime?
+  used_at         DateTime?
+  cancelled_at    DateTime?
+  update_at       DateTime         @default(now()) @updatedAt
+  create_at       DateTime         @default(now())
+
+  member_id String
+  member    Member  @relation(fields: [member_id], references: [id])
+  reward_id String
+  reward    Reward  @relation(fields: [reward_id], references: [id])
+  /// the order it discounts; one reward per order
+  order_id  String? @unique
+  order     Order?  @relation(fields: [order_id], references: [id])
+
+  points_entry PointsEntry?
+
+  @@index([member_id, status])
+}
+
+/// LINE webhook events already handled; LINE may redeliver the same webhookEventId.
+model LineWebhookEvent {
+  id        String   @id
+  type      String
+  create_at DateTime @default(now())
+
+  @@index([create_at])
 }

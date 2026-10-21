@@ -10,4 +10,6 @@ export default registerAs('line', () => ({
     channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim(),
     // LINE Login channel that owns the LIFF app: audience of LIFF ID tokens
     loginChannelId: process.env.LINE_LOGIN_CHANNEL_ID?.trim(),
+    // LIFF app the receipt QR opens (liff.line.me/<id>?claim=...); loyalty QR is off without it
+    liffId: process.env.LINE_LIFF_ID?.trim(),
 }))

@@ -9,6 +9,27 @@ export const orderInclude = {
   payment: {
     orderBy: { create_at: 'asc' },
   },
+  // loyalty: the receipt QR for this order, and the reward that discounted it
+  claim_token: {
+    select: {
+      token: true,
+      code: true,
+      points: true,
+      expires_at: true,
+      claimed_at: true,
+      member: { select: { member_no: true, display_name: true } },
+    },
+  },
+  reward_code: {
+    select: {
+      code: true,
+      status: true,
+      reward_name: true,
+      cost_points: true,
+      discount_satang: true,
+      member: { select: { member_no: true, display_name: true } },
+    },
+  },
   grab_order: {
     select: {
       grab_order_id: true,

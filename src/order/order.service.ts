@@ -16,6 +16,7 @@ import {
   productWithGroupsInclude,
 } from './function/build-order-item.function.js';
 import { orderInclude } from './function/order.include.js';
+import { LoyaltyOrderService } from '../loyalty/loyalty-order.service.js';
 
 // order_number collisions (two orders at once) are retried
 const MAX_CREATE_ATTEMPTS = 3;
@@ -25,6 +26,7 @@ export class OrderService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly loyalty: LoyaltyOrderService,
   ) {}
 
   async getList(dto: GetOrderListDTO) {
@@ -181,7 +183,11 @@ export class OrderService {
         (sum, item) => sum + item.line_total_satang,
         0,
       );
-      const discountSatang = 0;
+      // a reward code becomes a fixed discount worked out here, never by the POS
+      const reward = dto.reward_code
+        ? await this.loyalty.discountInTx(tx, dto.reward_code, items, subtotalSatang)
+        : null;
+      const discountSatang = reward?.discountSatang ?? 0;
 
       const last = await tx.order.aggregate({
         where: {
@@ -209,6 +215,12 @@ export class OrderService {
         include: orderInclude,
       });
 
+      if (reward) {
+        await this.loyalty.attachInTx(tx, reward.rewardCodeId, order.id, reward.discountSatang);
+        const withReward = await tx.order.findUniqueOrThrow({ where: { id: order.id }, include: orderInclude });
+        return { order: withReward, created: true };
+      }
+
       return { order, created: true };
     });
   }
@@ -232,14 +244,18 @@ export class OrderService {
       );
     }
 
-    const result = await this.prisma.order.update({
-      where: {
-        id: id,
-      },
-      data: {
-        status: Status.VOIDED,
-      },
-      include: orderInclude,
+    // a reward on this order goes back to the customer's LINE screen
+    const result = await this.prisma.$transaction(async (tx) => {
+      await this.loyalty.releaseInTx(tx, id);
+      return await tx.order.update({
+        where: {
+          id: id,
+        },
+        data: {
+          status: Status.VOIDED,
+        },
+        include: orderInclude,
+      });
     });
 
     await this.audit.log({

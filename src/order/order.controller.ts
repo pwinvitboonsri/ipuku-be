@@ -22,6 +22,7 @@ import { GetOrderListDTO } from './dto/get-order-list.dto.js';
 import { GetByIdDTO } from './dto/get-by-id.dto.js';
 import { OrderResEntity } from './entity/order-res.entity.js';
 import { OrderListEntity } from './entity/order-list.entity.js';
+import { LoyaltyOrderService } from '../loyalty/loyalty-order.service.js';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(Role.OWNER, Role.STAFF)
@@ -30,6 +31,7 @@ export class OrderController {
   constructor(
     private readonly orderService: OrderService,
     private readonly paymentService: PaymentService,
+    private readonly loyalty: LoyaltyOrderService,
   ) {}
 
   @Get()
@@ -38,7 +40,7 @@ export class OrderController {
 
     return new OrderListEntity({
       success: true,
-      data: result,
+      data: result.map((o) => this.loyalty.withClaimUrl(o)),
       meta: {
         total: result.length,
       },
@@ -51,7 +53,7 @@ export class OrderController {
 
     return new OrderResEntity({
       success: true,
-      data: result,
+      data: this.loyalty.withClaimUrl(result),
     });
   }
 
@@ -70,7 +72,7 @@ export class OrderController {
 
     return new OrderResEntity({
       success: true,
-      data: result,
+      data: this.loyalty.withClaimUrl(result),
     });
   }
 
@@ -94,7 +96,7 @@ export class OrderController {
 
     return new OrderResEntity({
       success: true,
-      data: result,
+      data: this.loyalty.withClaimUrl(result),
     });
   }
 
@@ -118,7 +120,7 @@ export class OrderController {
 
     return new OrderResEntity({
       success: true,
-      data: order,
+      data: this.loyalty.withClaimUrl(order),
       meta: {
         stock_alerts: stockAlerts,
       },
@@ -146,7 +148,7 @@ export class OrderController {
 
     return new OrderResEntity({
       success: true,
-      data: result,
+      data: this.loyalty.withClaimUrl(result),
     });
   }
 }

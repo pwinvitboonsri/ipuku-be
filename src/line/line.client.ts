@@ -49,13 +49,18 @@ export class LineClient {
 
   // Never throws: a blocked OA or non-friend is expected, and the ledger stays the source of truth
   async pushText(to: string, text: string): Promise<LinePushResult> {
+    return await this.push(to, [{ type: 'text', text }]);
+  }
+
+  // Up to 5 message objects (text, flex…) in one push
+  async push(to: string, messages: object[]): Promise<LinePushResult> {
     const res = await fetch(`${LINE_API}/v2/bot/message/push`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.config.get<string>('line.channelAccessToken')}`,
       },
-      body: JSON.stringify({ to, messages: [{ type: 'text', text }] }),
+      body: JSON.stringify({ to, messages }),
     }).catch((err: Error) => {
       this.logger.warn(`Push to ${to} failed to send: ${err.message}`);
       return null;

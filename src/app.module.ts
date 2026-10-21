@@ -26,6 +26,7 @@ import { MenuModule } from './menu/menu.module.js';
 import { PushModule } from './push/push.module.js';
 import { GrabModule } from './grab/grab.module.js';
 import { LineModule } from './line/line.module.js';
+import { LoyaltyModule } from './loyalty/loyalty.module.js';
 
 @Module({
   imports: [
@@ -63,6 +64,7 @@ import { LineModule } from './line/line.module.js';
     PushModule,
     GrabModule,
     LineModule,
+    LoyaltyModule,
   ],
   controllers: [],
   providers: [

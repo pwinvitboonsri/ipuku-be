@@ -3,7 +3,10 @@ import {
   ArrayMinSize,
   IsArray,
   IsNotEmpty,
+  IsOptional,
+  IsString,
   IsUUID,
+  MaxLength,
   ValidateNested,
 } from 'class-validator';
 import { CreateOrderItemDTO } from './create-order-item.dto.js';
@@ -19,4 +22,10 @@ export class CreateOrderDTO {
   @ValidateNested({ each: true })
   @Type(() => CreateOrderItemDTO)
   items: CreateOrderItemDTO[];
+
+  // a reward code validated at the counter (POST /loyalty/reward-codes/validate); the API sets the discount
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  reward_code?: string;
 }

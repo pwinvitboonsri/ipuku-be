@@ -7,6 +7,7 @@ import { PayOrderDTO } from './dto/pay-order.dto.js';
 import { RefundOrderDTO } from './dto/refund-order.dto.js';
 import { orderInclude } from './function/order.include.js';
 import { validateTenders } from './function/validate-tenders.function.js';
+import { LoyaltyOrderService } from '../loyalty/loyalty-order.service.js';
 
 @Injectable()
 export class PaymentService {
@@ -14,6 +15,7 @@ export class PaymentService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly stockMovement: StockMovementService,
+    private readonly loyalty: LoyaltyOrderService,
   ) {}
 
   async pay(
@@ -23,7 +25,7 @@ export class PaymentService {
     ip: string,
     userAgent: string,
   ) {
-    const { order, payments, stockAlerts } = await this.prisma.$transaction(
+    const { order, payments, stockAlerts, loyalty } = await this.prisma.$transaction(
       async (tx) => {
         const order = await tx.order.findUniqueOrThrow({
           where: {
@@ -72,6 +74,9 @@ export class PaymentService {
 
         const stockAlerts = await this.stockMovement.deductForOrder(tx, order);
 
+        // reward on the order is spent; a walk-in order gets its points QR
+        const loyalty = await this.loyalty.onPaidInTx(tx, order, actorStaffId);
+
         const paidOrder = await tx.order.findUniqueOrThrow({
           where: {
             id: orderId,
@@ -79,7 +84,7 @@ export class PaymentService {
           include: orderInclude,
         });
 
-        return { order: paidOrder, payments, stockAlerts };
+        return { order: paidOrder, payments, stockAlerts, loyalty };
       },
     );
 
@@ -101,6 +106,8 @@ export class PaymentService {
       userAgent: userAgent,
     });
 
+    void this.loyalty.notifyPaid(loyalty);
+
     return { order, stockAlerts };
   }
 
@@ -111,7 +118,7 @@ export class PaymentService {
     ip: string,
     userAgent: string,
   ) {
-    const { order, refunds } = await this.prisma.$transaction(async (tx) => {
+    const { order, refunds, loyalty } = await this.prisma.$transaction(async (tx) => {
       const order = await tx.order.findUniqueOrThrow({
         where: {
           id: orderId,
@@ -165,6 +172,9 @@ export class PaymentService {
         );
       }
 
+      // points earned (or spent) on this order are reversed; may leave a negative balance
+      const loyalty = await this.loyalty.reverseInTx(tx, order, actorStaffId);
+
       const refundedOrder = await tx.order.findUniqueOrThrow({
         where: {
           id: orderId,
@@ -172,7 +182,7 @@ export class PaymentService {
         include: orderInclude,
       });
 
-      return { order: refundedOrder, refunds };
+      return { order: refundedOrder, refunds, loyalty };
     });
 
     await this.audit.log({
@@ -190,6 +200,8 @@ export class PaymentService {
       ipAddress: ip,
       userAgent: userAgent,
     });
+
+    void this.loyalty.notifyRefund(loyalty);
 
     return order;
   }

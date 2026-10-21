@@ -5,12 +5,14 @@ import { PassportModule } from '@nestjs/passport';
 import { CommonModule } from '../common/common.module.js';
 import { PaymentService } from './payment.service.js';
 import { StockMovementModule } from '../stock-movement/stock-movement.module.js';
+import { LoyaltyModule } from '../loyalty/loyalty.module.js';
 
 @Module({
   imports: [
     PassportModule.register({ defaultStrategy: 'jwt' }),
     CommonModule,
     StockMovementModule,
+    LoyaltyModule,
   ],
   controllers: [OrderController],
   providers: [OrderService, PaymentService],
