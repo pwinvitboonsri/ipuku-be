@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseEnumPipe, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/auth/guard/jwt-auth.guard.js';
 import { RolesGuard } from '../common/auth/guard/roles.guard.js';
 import { Roles } from '../common/auth/decorator/roles.decorator.js';
@@ -7,6 +7,10 @@ import { LoyaltyAdminService } from './loyalty-admin.service.js';
 import { UpdateProgramDTO } from './dto/update-program.dto.js';
 import { CreateRewardDTO, ListMembersDTO, UpdateRewardDTO, UpdateRewardStatusDTO } from './dto/reward.dto.js';
 import { ListActivityDTO } from './dto/activity.dto.js';
+import { EarnRuleDTO, EarnRuleStatusDTO } from './dto/earn-rule.dto.js';
+import { UpdatePerkDTO } from './dto/perk.dto.js';
+import { AdjustPointsDTO, MemberBirthdayDTO } from './dto/member-admin.dto.js';
+import { PerkKind } from '../generated/prisma/enums.js';
 
 // Back office → Loyalty
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -51,6 +55,52 @@ export class LoyaltyAdminController {
   @HttpCode(HttpStatus.OK)
   async updateRewardStatus(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateRewardStatusDTO, @Req() req: any) {
     return { success: true, data: await this.admin.updateRewardStatus(id, dto.is_active, this.actor(req)) };
+  }
+
+  @Get('earn-rules')
+  async earnRules() {
+    const data = await this.admin.listEarnRules();
+    return { success: true, data, meta: { total: data.length } };
+  }
+
+  @Post('earn-rules/create')
+  async createEarnRule(@Body() dto: EarnRuleDTO, @Req() req: any) {
+    return { success: true, data: await this.admin.createEarnRule(dto, this.actor(req)) };
+  }
+
+  @Post('earn-rules/:id/update')
+  @HttpCode(HttpStatus.OK)
+  async updateEarnRule(@Param('id', ParseUUIDPipe) id: string, @Body() dto: EarnRuleDTO, @Req() req: any) {
+    return { success: true, data: await this.admin.updateEarnRule(id, dto, this.actor(req)) };
+  }
+
+  @Post('earn-rules/:id/update-status')
+  @HttpCode(HttpStatus.OK)
+  async updateEarnRuleStatus(@Param('id', ParseUUIDPipe) id: string, @Body() dto: EarnRuleStatusDTO, @Req() req: any) {
+    return { success: true, data: await this.admin.updateEarnRuleStatus(id, dto.is_active, this.actor(req)) };
+  }
+
+  @Get('perks')
+  async perks() {
+    return { success: true, data: await this.admin.listPerks() };
+  }
+
+  @Post('perks/:kind/update')
+  @HttpCode(HttpStatus.OK)
+  async updatePerk(@Param('kind', new ParseEnumPipe(PerkKind)) kind: PerkKind, @Body() dto: UpdatePerkDTO, @Req() req: any) {
+    return { success: true, data: await this.admin.updatePerk(kind, dto, this.actor(req)) };
+  }
+
+  @Post('members/:id/adjust')
+  @HttpCode(HttpStatus.OK)
+  async adjust(@Param('id', ParseUUIDPipe) id: string, @Body() dto: AdjustPointsDTO, @Req() req: any) {
+    return { success: true, data: await this.admin.adjustPoints(id, dto, this.actor(req)) };
+  }
+
+  @Post('members/:id/birthday')
+  @HttpCode(HttpStatus.OK)
+  async birthday(@Param('id', ParseUUIDPipe) id: string, @Body() dto: MemberBirthdayDTO, @Req() req: any) {
+    return { success: true, data: await this.admin.setBirthday(id, dto, this.actor(req)) };
   }
 
   @Get('members')

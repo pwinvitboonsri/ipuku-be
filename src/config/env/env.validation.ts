@@ -50,6 +50,8 @@ export const envValidationSchema = Joi.object({
     LINE_CHANNEL_ACCESS_TOKEN: Joi.string().allow('').optional(),
     LINE_LOGIN_CHANNEL_ID: Joi.string().pattern(/^\d+$/).allow('').optional(),
     LINE_LIFF_ID: Joi.string().pattern(/^\d+-\w+$/).allow('').optional(),
+    // shared with the scheduler (ops/keep-warm) for POST /loyalty/jobs/daily; empty = jobs off
+    JOBS_SECRET: Joi.string().min(24).allow('').optional(),
 
     // Web Push (npx web-push generate-vapid-keys); empty = push off
     VAPID_PUBLIC_KEY: Joi.string().allow('').optional(),

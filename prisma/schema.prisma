@@ -109,6 +109,19 @@ enum AuditAction {
   UPDATE_REWARD
   ACTIVE_REWARD
   DEACTIVATE_REWARD
+
+  CREATE_EARN_RULE
+  UPDATE_EARN_RULE
+  ACTIVE_EARN_RULE
+  DEACTIVATE_EARN_RULE
+  UPDATE_LOYALTY_PERK
+  ADJUST_POINTS
+}
+
+/// The two balances a member collects at the same time; each reward is priced in one of them.
+enum LoyaltyCurrency {
+  POINTS
+  STAMPS
 }
 
 /// One row in the points ledger. Balances are the sum of entries; nothing is edited in place.
@@ -119,6 +132,40 @@ enum PointsEntryType {
   REDEEM
   /// an earn or redeem undone because its order was refunded
   REVERSAL
+  /// a perk (welcome, birthday…) granted points or stamps
+  BONUS
+  /// owner's manual correction, with a reason
+  ADJUST
+  /// points that ran out (Phase 2)
+  EXPIRE
+}
+
+/// Extra earn rules on top of the program's base points per ฿
+enum EarnRuleKind {
+  /// stamps when a paid order qualifies (or per qualifying item)
+  STAMPS_PER_VISIT
+  /// ×N on the points a (qualifying part of the) order earns
+  MULTIPLIER
+  /// +N points or stamps when the order qualifies (or per qualifying item)
+  BONUS
+}
+
+enum PerkKind {
+  WELCOME
+  BIRTHDAY
+}
+
+enum WelcomeTrigger {
+  /// right after accepting consent
+  JOIN
+  /// on the member's first receipt claim
+  FIRST_CLAIM
+}
+
+enum CouponSource {
+  WELCOME
+  BIRTHDAY
+  MANUAL
 }
 
 enum RewardType {
@@ -126,6 +173,12 @@ enum RewardType {
   FIXED_DISCOUNT
   /// one item free, up to max_discount_satang
   FREE_ITEM
+  /// percent off the (eligible part of the) order, capped by max_discount_satang
+  PERCENT_OFF
+  /// one of option_ids free on a line that has it (size-up, oat milk…), capped
+  FREE_OPTION
+  /// buy buy_qty eligible items, get get_qty of the cheapest get_percent% off (once per voucher)
+  BUY_X_GET_Y
 }
 
 enum RewardCodeStatus {
@@ -511,12 +564,17 @@ model Member {
   picture_url     String?
   consent_version String
   consented_at    DateTime
+  /// optional, for the birthday perk; set once by the member, later only by the owner
+  birth_day       Int?
+  birth_month     Int?
   update_at       DateTime @default(now()) @updatedAt
   create_at       DateTime @default(now())
 
   points_entry PointsEntry[]
   claim_token  ClaimToken[]
   reward_code  RewardCode[]
+  coupon       MemberCoupon[]
+  perk_grant   PerkGrant[]
 
   @@index([display_name])
 }
@@ -525,6 +583,7 @@ model Member {
 model PointsEntry {
   id        String          @id @default(uuid(7))
   type      PointsEntryType
+  currency  LoyaltyCurrency @default(POINTS)
   /// signed: + earn, − redeem, opposite sign of the reversed entry
   points    Int
   note      String?
@@ -534,7 +593,8 @@ model PointsEntry {
   member         Member       @relation(fields: [member_id], references: [id])
   order_id       String?
   order          Order?       @relation(fields: [order_id], references: [id])
-  claim_token_id String?      @unique
+  /// a claim can write two entries: points and stamps
+  claim_token_id String?
   claim_token    ClaimToken?  @relation(fields: [claim_token_id], references: [id])
   reward_code_id String?      @unique
   reward_code    RewardCode?  @relation(fields: [reward_code_id], references: [id])
@@ -546,9 +606,10 @@ model PointsEntry {
   reverses       PointsEntry? @relation("reversal", fields: [reverses_id], references: [id])
   reversed_by    PointsEntry? @relation("reversal")
 
-  @@index([member_id, create_at])
+  @@index([member_id, currency, create_at])
   @@index([order_id])
   @@index([type, create_at])
+  @@index([claim_token_id])
 }
 
 /// One-time "scan to collect points" token for a paid walk-in order (QR on screen + receipt).
@@ -558,8 +619,11 @@ model ClaimToken {
   token        String    @unique
   /// 6 characters printed under the QR for manual entry
   code         String    @unique
-  /// points this order earns, fixed at payment with the rule in force then
+  /// points / stamps this order earns, fixed at payment with the rules in force then
   points       Int
+  stamps       Int       @default(0)
+  /// which rules gave what ([{label, points, stamps}]), shown in LINE
+  lines        Json?
   total_satang Int
   expires_at   DateTime
   claimed_at   DateTime?
@@ -570,32 +634,54 @@ model ClaimToken {
   member_id String?
   member    Member? @relation(fields: [member_id], references: [id])
 
-  points_entry PointsEntry?
+  points_entry PointsEntry[]
 
   @@index([expires_at])
 }
 
 /// Something members spend points on. Deactivating hides it; codes already issued still work until they expire.
 model Reward {
-  id                  String     @id @default(uuid(7))
-  name                String
-  cost_points         Int
-  type                RewardType
+  id                      String          @id @default(uuid(7))
+  name                    String
+  cost_points             Int
+  type                    RewardType
   /// FIXED_DISCOUNT: baht off the order
-  discount_satang     Int?
-  /// FREE_ITEM: this product (any options) is free, up to max_discount_satang
-  max_discount_satang Int?
+  discount_satang         Int?
+  /// cap for FREE_ITEM / PERCENT_OFF / FREE_OPTION / BUY_X_GET_Y
+  max_discount_satang     Int?
+  /// what it costs: cost_points units of cost_currency
+  cost_currency           LoyaltyCurrency @default(POINTS)
+  /// PERCENT_OFF: percent (1–100)
+  percent                 Int?
+  /// PERCENT_OFF / BUY_X_GET_Y: order must reach this subtotal
+  min_spend_satang        Int?
+  /// FREE_OPTION: any of these modifier options is free
+  option_ids              String[]
+  /// PERCENT_OFF / BUY_X_GET_Y / FREE_OPTION: only these products/categories count (empty = all)
+  product_ids             String[]
+  category_ids            String[]
+  /// BUY_X_GET_Y
+  buy_qty                 Int?
+  get_qty                 Int?
+  get_percent             Int?
+  /// shown and redeemable only in this window (null = always)
+  starts_at               DateTime?
+  ends_at                 DateTime?
+  /// Phase 3: may be used on an order that already has a store promotion
+  combine_with_promotions Boolean         @default(true)
   /// photo shown in LINE and the back office (R2 public URL); a free item falls back to its product's photo
-  image_url           String?
-  sort_order          Int        @default(0)
-  is_active           Boolean    @default(true)
-  update_at           DateTime   @default(now()) @updatedAt
-  create_at           DateTime   @default(now())
+  image_url               String?
+  sort_order              Int             @default(0)
+  is_active               Boolean         @default(true)
+  update_at               DateTime        @default(now()) @updatedAt
+  create_at               DateTime        @default(now())
 
   product_id String?
   product    Product? @relation(fields: [product_id], references: [id])
 
   reward_code RewardCode[]
+  coupon      MemberCoupon[]
+  perk        LoyaltyPerk[]
 }
 
 /// A reward the member chose in LINE: shown as a rotating QR (code + time-based token) or the plain code.
@@ -609,6 +695,7 @@ model RewardCode {
   /// snapshots, so history reads right after the reward is edited
   reward_name     String
   cost_points     Int
+  cost_currency   LoyaltyCurrency  @default(POINTS)
   /// discount actually given, set when applied to an order
   discount_satang Int?
   expires_at      DateTime
@@ -619,12 +706,15 @@ model RewardCode {
   create_at       DateTime         @default(now())
 
   member_id String
-  member    Member  @relation(fields: [member_id], references: [id])
+  member    Member        @relation(fields: [member_id], references: [id])
   reward_id String
-  reward    Reward  @relation(fields: [reward_id], references: [id])
+  reward    Reward        @relation(fields: [reward_id], references: [id])
   /// the order it discounts; one reward per order
-  order_id  String? @unique
-  order     Order?  @relation(fields: [order_id], references: [id])
+  order_id  String?       @unique
+  order     Order?        @relation(fields: [order_id], references: [id])
+  /// shown from a wallet coupon (costs nothing; the coupon is used when the order is paid)
+  coupon_id String?       @unique
+  coupon    MemberCoupon? @relation(fields: [coupon_id], references: [id])
 
   points_entry PointsEntry?
 
@@ -638,4 +728,86 @@ model LineWebhookEvent {
   create_at DateTime @default(now())
 
   @@index([create_at])
+}
+
+/// Owner-configured extra earn rules (base points per ฿ stays in LoyaltyProgram)
+model EarnRule {
+  id               String          @id @default(uuid(7))
+  name             String
+  kind             EarnRuleKind
+  is_active        Boolean         @default(true)
+  /// STAMPS_PER_VISIT / BONUS: how many
+  amount           Int             @default(0)
+  /// BONUS: what it gives
+  currency         LoyaltyCurrency @default(POINTS)
+  /// MULTIPLIER: in tenths (20 = ×2, 15 = ×1.5)
+  multiplier_x10   Int             @default(10)
+  /// STAMPS_PER_VISIT / BONUS: per qualifying item instead of once per order
+  per_item         Boolean         @default(false)
+  /// order must reach this total / have this many qualifying items
+  min_spend_satang Int             @default(0)
+  min_items        Int             @default(0)
+  /// only these products/categories count (empty = all)
+  product_ids      String[]
+  category_ids     String[]
+  /// schedule in Thailand time: weekdays 0=Sun…6=Sat (empty = every day), minutes since midnight
+  weekdays         Int[]
+  time_from        Int?
+  time_to          Int?
+  starts_at        DateTime?
+  ends_at          DateTime?
+  /// MULTIPLIER: true = adds on top of others, false = only the best non-stackable one counts
+  stackable        Boolean         @default(false)
+  sort_order       Int             @default(0)
+  update_at        DateTime        @default(now()) @updatedAt
+  create_at        DateTime        @default(now())
+}
+
+/// Welcome / birthday perks (one row per kind)
+model LoyaltyPerk {
+  kind              PerkKind       @id
+  is_active         Boolean        @default(false)
+  /// WELCOME only
+  trigger           WelcomeTrigger @default(JOIN)
+  grant_points      Int            @default(0)
+  grant_stamps      Int            @default(0)
+  /// optional coupon for a reward, valid coupon_valid_days
+  coupon_valid_days Int            @default(30)
+  /// BIRTHDAY: also send a LINE message when granted
+  send_message      Boolean        @default(true)
+  update_at         DateTime       @default(now()) @updatedAt
+
+  reward_id String?
+  reward    Reward? @relation(fields: [reward_id], references: [id])
+}
+
+/// A reward granted to a member for free (welcome, birthday, by the owner). Used like a reward in LINE.
+model MemberCoupon {
+  id          String       @id @default(uuid(7))
+  source      CouponSource
+  note        String?
+  valid_until DateTime
+  used_at     DateTime?
+  create_at   DateTime     @default(now())
+
+  member_id   String
+  member      Member      @relation(fields: [member_id], references: [id])
+  reward_id   String
+  reward      Reward      @relation(fields: [reward_id], references: [id])
+  reward_code RewardCode?
+
+  @@index([member_id, used_at])
+}
+
+/// A perk given once per period (welcome: "once", birthday: the year), so jobs can run twice safely
+model PerkGrant {
+  id        String   @id @default(uuid(7))
+  kind      PerkKind
+  period    String
+  create_at DateTime @default(now())
+
+  member_id String
+  member    Member @relation(fields: [member_id], references: [id])
+
+  @@unique([member_id, kind, period])
 }

@@ -1,10 +1,23 @@
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsInt, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 
 export class JoinDTO {
   @IsNotEmpty()
   @IsString()
   @MaxLength(32)
   consent_version: string;
+
+  // optional birthday for the birthday perk: both or neither
+  @ValidateIf((o: JoinDTO) => o.birth_month != null)
+  @IsInt()
+  @Min(1)
+  @Max(31)
+  birth_day?: number;
+
+  @ValidateIf((o: JoinDTO) => o.birth_day != null)
+  @IsInt()
+  @Min(1)
+  @Max(12)
+  birth_month?: number;
 }
 
 // one of: token from the receipt QR URL, or the 6-character code typed from the receipt

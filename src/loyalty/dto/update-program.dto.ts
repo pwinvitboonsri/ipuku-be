@@ -2,9 +2,10 @@ import { IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class
 
 // Back office → Loyalty → Program. Applies to orders paid after the change.
 export class UpdateProgramDTO {
+  // 0 = no base points (e.g. a stamps-only program)
   @IsOptional()
   @IsInt()
-  @Min(1)
+  @Min(0)
   @Max(1000)
   points_per_unit?: number;
 

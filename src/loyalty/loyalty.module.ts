@@ -10,14 +10,16 @@ import { LoyaltyAdminService } from './loyalty-admin.service.js';
 import { LoyaltyMemberController } from './loyalty-member.controller.js';
 import { LoyaltyPosController } from './loyalty-pos.controller.js';
 import { LoyaltyAdminController } from './loyalty-admin.controller.js';
+import { LoyaltyPerksService } from './loyalty-perks.service.js';
+import { JobsSecretGuard, LoyaltyJobsController } from './loyalty-jobs.controller.js';
 import { LineUserGuard } from './guard/line-user.guard.js';
 
 // LINE points & rewards (see the loyalty design). The order module calls LoyaltyOrderService
 // inside its pay/refund/void transactions.
 @Module({
   imports: [PassportModule.register({ defaultStrategy: 'jwt' }), CommonModule, LineModule],
-  controllers: [LoyaltyMemberController, LoyaltyPosController, LoyaltyAdminController],
-  providers: [LoyaltyLedgerService, LoyaltyProgramService, LoyaltyOrderService, LoyaltyMemberService, LoyaltyAdminService, LineUserGuard],
+  controllers: [LoyaltyMemberController, LoyaltyPosController, LoyaltyAdminController, LoyaltyJobsController],
+  providers: [LoyaltyLedgerService, LoyaltyProgramService, LoyaltyOrderService, LoyaltyMemberService, LoyaltyAdminService, LoyaltyPerksService, LineUserGuard, JobsSecretGuard],
   exports: [LoyaltyOrderService],
 })
 export class LoyaltyModule {}

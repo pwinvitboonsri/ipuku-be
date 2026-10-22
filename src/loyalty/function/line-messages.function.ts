@@ -43,6 +43,7 @@ export interface EarnMessageInput {
   discountSatang: number;
   totalSatang: number;
   points: number;
+  stamps?: number;
   balance: number;
   cardUrl: string;
 }
@@ -52,7 +53,7 @@ export function earnMessage(m: EarnMessageInput) {
   const items = m.lines.map((l) => row(l.qty > 1 ? `${l.name} ×${l.qty}` : l.name, baht(l.totalSatang)));
   return {
     type: 'flex',
-    altText: `+${m.points} แต้ม · ใบเสร็จ #${m.orderNumber}`,
+    altText: `${m.points > 0 ? `+${m.points} แต้ม` : `+${m.stamps ?? 0} แสตมป์`} · ใบเสร็จ #${m.orderNumber}`,
     contents: bubble(
       [
         text(`ใบเสร็จ · #${m.orderNumber} · ${when(m.paidAt)}`, { size: 'xs', color: '#FFFFFF' }),
@@ -71,7 +72,7 @@ export function earnMessage(m: EarnMessageInput) {
           cornerRadius: '8px',
           backgroundColor: '#E5F8EC',
           contents: [
-            text(`+${m.points} แต้ม`, { weight: 'bold', color: '#0A7A3B' }),
+            text([m.points > 0 ? `+${m.points} แต้ม` : '', m.stamps ? `+${m.stamps} แสตมป์` : ''].filter(Boolean).join(' · '), { weight: 'bold', color: '#0A7A3B' }),
             text(`ยอดรวม ${m.balance} แต้ม`, { size: 'xs', align: 'end', gravity: 'center' }),
           ],
         },
@@ -82,7 +83,8 @@ export function earnMessage(m: EarnMessageInput) {
 }
 
 // After a reward code is used on a paid order
-export function redeemedMessage(m: { rewardName: string; cost: number; balance: number; orderNumber: number; at: Date; cardUrl: string }) {
+export function redeemedMessage(m: { rewardName: string; cost: number; currency?: 'POINTS' | 'STAMPS'; balance: number; orderNumber: number; at: Date; cardUrl: string }) {
+  const unit = m.currency === 'STAMPS' ? 'แสตมป์' : 'แต้ม';
   return {
     type: 'flex',
     altText: `แลกรางวัลสำเร็จ · ${m.rewardName}`,
@@ -90,8 +92,7 @@ export function redeemedMessage(m: { rewardName: string; cost: number; balance: 
       [text('แลกรางวัลสำเร็จ', { weight: 'bold', size: 'md', color: '#FFFFFF' })],
       [
         text(m.rewardName, { weight: 'bold' }),
-        row('ใช้แต้ม', `−${m.cost}`),
-        row('คงเหลือ', `${m.balance} แต้ม`, { weight: 'bold' }),
+        ...(m.cost > 0 ? [row(`ใช้${unit}`, `−${m.cost}`), row('คงเหลือ', `${m.balance} ${unit}`, { weight: 'bold' })] : [text('คูปองของคุณถูกใช้แล้ว', { color: MUTED })]),
         text(`ใบเสร็จ #${m.orderNumber} · ${when(m.at)}`, { size: 'xs', color: MUTED }),
       ],
       { label: 'ดูบัตรสมาชิก', uri: m.cardUrl },
@@ -113,6 +114,24 @@ export function reversalMessage(m: { orderNumber: number; delta: number; balance
         row('คงเหลือ', `${m.balance} แต้ม`),
       ],
       { label: 'ดูบัตรสมาชิก', uri: m.cardUrl },
+    ),
+  };
+}
+
+// Birthday perk granted (daily job)
+export function birthdayMessage(m: { name: string | null; points: number; stamps: number; coupon: { reward_name: string; valid_until: Date } | null; cardUrl: string }) {
+  const gifts = [
+    ...(m.coupon ? [`${m.coupon.reward_name} (ใช้ได้ถึง ${when(m.coupon.valid_until)})`] : []),
+    ...(m.points > 0 ? [`+${m.points} แต้ม`] : []),
+    ...(m.stamps > 0 ? [`+${m.stamps} แสตมป์`] : []),
+  ];
+  return {
+    type: 'flex',
+    altText: 'สุขสันต์วันเกิด! ของขวัญจาก Ippuku',
+    contents: bubble(
+      [text(`สุขสันต์วันเกิด${m.name ? ` คุณ${m.name}` : ''}`, { weight: 'bold', size: 'md', color: '#FFFFFF' })],
+      [text('ของขวัญวันเกิดจาก Ippuku'), ...gifts.map((g) => text(`• ${g}`, { weight: 'bold' }))],
+      { label: 'ดูของขวัญ', uri: m.cardUrl },
     ),
   };
 }

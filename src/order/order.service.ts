@@ -185,7 +185,19 @@ export class OrderService {
       );
       // a reward code becomes a fixed discount worked out here, never by the POS
       const reward = dto.reward_code
-        ? await this.loyalty.discountInTx(tx, dto.reward_code, items, subtotalSatang)
+        ? await this.loyalty.discountInTx(
+            tx,
+            dto.reward_code,
+            // category and options let % off, free-option and buy-X-get-Y rewards find their lines
+            items.map((i) => ({
+              product_id: i.product_id,
+              category_id: productsById.get(i.product_id)?.category_id ?? null,
+              unit_price_satang: i.unit_price_satang,
+              quantity: i.quantity,
+              options: i.order_item_modifier.create.map((m) => ({ option_id: m.modifier_option_id, price_delta_satang: m.price_delta_satang })),
+            })),
+            subtotalSatang,
+          )
         : null;
       const discountSatang = reward?.discountSatang ?? 0;
 

@@ -1,11 +1,14 @@
 import { BadRequestException, ConflictException, ForbiddenException, GoneException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../generated/prisma/client.js';
-import { PointsEntryType, RewardCodeStatus, Status } from '../generated/prisma/enums.js';
+import { LoyaltyCurrency, PointsEntryType, RewardCodeStatus, Status, WelcomeTrigger } from '../generated/prisma/enums.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LineClient, LineIdentity } from '../line/line.client.js';
 import { LoyaltyLedgerService } from './loyalty-ledger.service.js';
 import { LoyaltyProgramService } from './loyalty-program.service.js';
 import { LoyaltyOrderService } from './loyalty-order.service.js';
+import { LoyaltyPerksService } from './loyalty-perks.service.js';
+import type { EarnLine } from './function/compute-earn.function.js';
+import { validBirthday } from './function/birthday.function.js';
 import { formatCode, memberLabel, normalizeCode, randomCode, randomSeed } from './function/loyalty-codes.function.js';
 import { REWARD_QR_PERIOD_S } from './function/reward-qr.function.js';
 import { earnMessage } from './function/line-messages.function.js';
@@ -28,6 +31,7 @@ export class LoyaltyMemberService {
     private readonly ledger: LoyaltyLedgerService,
     private readonly program: LoyaltyProgramService,
     private readonly orders: LoyaltyOrderService,
+    private readonly perks: LoyaltyPerksService,
   ) {}
 
   // A member who accepted the current consent (null otherwise); refreshes name/photo from the LINE profile
@@ -59,30 +63,44 @@ export class LoyaltyMemberService {
     if (this.codeTries.size > 5000) this.codeTries.delete(this.codeTries.keys().next().value!);
   }
 
-  // My Card: membership state, balance, next reward and recent history
+  // My Card: membership state, both balances, next rewards, coupons and recent history
   async me(user: LineIdentity) {
     const program = await this.program.get();
     const { member, found } = await this.findMember(user, program.consent_version);
+    const stampReward = await this.prisma.reward.findFirst({
+      where: { is_active: true, cost_currency: LoyaltyCurrency.STAMPS, ...this.inWindow(new Date()) },
+      orderBy: { cost_points: 'asc' },
+    });
     const base = {
       profile: { name: user.name, picture: user.picture },
-      program: { points_per_unit: program.points_per_unit, unit_satang: program.unit_satang, consent_version: program.consent_version },
+      program: {
+        points_per_unit: program.points_per_unit,
+        unit_satang: program.unit_satang,
+        consent_version: program.consent_version,
+        // size of the stamp card on My Card (the cheapest stamp reward); null = no stamp rewards
+        stamp_goal: stampReward?.cost_points ?? null,
+      },
     };
     if (!member) {
       // consented to an older version: same member, asked again
       return { ...base, member: null, rejoin: found };
     }
 
-    const [balance, history, rewards] = await Promise.all([
-      this.ledger.balance(member.id),
+    const balances = await this.ledger.balances(member.id);
+    const [history, rewards, coupons] = await Promise.all([
       this.prisma.pointsEntry.findMany({
         where: { member_id: member.id },
         orderBy: { create_at: 'desc' },
         take: HISTORY,
         include: { order: { select: { order_number: true } } },
       }),
-      this.prisma.reward.findMany({ where: { is_active: true }, orderBy: [{ cost_points: 'asc' }] }),
+      this.prisma.reward.findMany({ where: { is_active: true, ...this.inWindow(new Date()) }, orderBy: [{ cost_points: 'asc' }] }),
+      this.prisma.memberCoupon.count({ where: { member_id: member.id, used_at: null, valid_until: { gt: new Date() } } }),
     ]);
-    const next = rewards.find((r) => r.cost_points > balance.available) ?? null;
+    const nextOf = (currency: LoyaltyCurrency, available: number) => {
+      const next = rewards.find((r) => r.cost_currency === currency && r.cost_points > available);
+      return next ? { name: next.name, cost_points: next.cost_points, need: next.cost_points - available } : null;
+    };
 
     return {
       ...base,
@@ -91,12 +109,18 @@ export class LoyaltyMemberService {
         display_name: member.display_name,
         picture_url: member.picture_url,
         joined_at: member.consented_at,
-        ...balance,
+        birthday: member.birth_day && member.birth_month ? { day: member.birth_day, month: member.birth_month } : null,
+        coupons,
+        // points at the top level (as before); stamps alongside
+        ...balances.points,
+        stamps: balances.stamps,
       },
-      next_reward: next && { name: next.name, cost_points: next.cost_points, need: next.cost_points - balance.available },
+      next_reward: nextOf(LoyaltyCurrency.POINTS, balances.points.available),
+      next_stamp_reward: nextOf(LoyaltyCurrency.STAMPS, balances.stamps.available),
       history: history.map((e) => ({
         id: e.id,
         type: e.type,
+        currency: e.currency,
         points: e.points,
         note: e.note,
         order_number: e.order?.order_number ?? null,
@@ -105,19 +129,33 @@ export class LoyaltyMemberService {
     };
   }
 
-  // PDPA consent: creates the member (or records the newer consent version)
-  async join(user: LineIdentity, consentVersion: string) {
+  // rewards shown/redeemable now (no dates = always)
+  private inWindow(now: Date): Prisma.RewardWhereInput {
+    return { AND: [{ OR: [{ starts_at: null }, { starts_at: { lte: now } }] }, { OR: [{ ends_at: null }, { ends_at: { gt: now } }] }] };
+  }
+
+  // PDPA consent: creates the member (or records the newer consent version). The birthday is optional
+  // and set once here; afterwards only the owner can change it. A JOIN-triggered welcome perk is granted.
+  async join(user: LineIdentity, consentVersion: string, birthday?: { day: number; month: number }) {
     const program = await this.program.get();
     if (consentVersion !== program.consent_version) {
       throw new ConflictException({ message: 'Consent text changed — read it again', reason: 'CONSENT_CHANGED' });
     }
+    if (birthday && !validBirthday(birthday.day, birthday.month)) {
+      throw new BadRequestException({ message: 'Not a real date', reason: 'INVALID_BIRTHDAY' });
+    }
     const now = new Date();
-    await this.prisma.member.upsert({
-      where: { line_user_id: user.userId },
-      create: { line_user_id: user.userId, display_name: user.name, picture_url: user.picture, consent_version: consentVersion, consented_at: now },
-      update: { display_name: user.name, picture_url: user.picture, consent_version: consentVersion, consented_at: now },
+    const welcome = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.member.findUnique({ where: { line_user_id: user.userId } });
+      const setBirthday = birthday && !(existing?.birth_day && existing.birth_month) ? { birth_day: birthday.day, birth_month: birthday.month } : {};
+      const member = await tx.member.upsert({
+        where: { line_user_id: user.userId },
+        create: { line_user_id: user.userId, display_name: user.name, picture_url: user.picture, consent_version: consentVersion, consented_at: now, ...setBirthday },
+        update: { display_name: user.name, picture_url: user.picture, consent_version: consentVersion, consented_at: now, ...setBirthday },
+      });
+      return await this.perks.welcomeInTx(tx, member.id, WelcomeTrigger.JOIN);
     });
-    return await this.me(user);
+    return { ...(await this.me(user)), welcome };
   }
 
   // Receipt QR (token from the URL) or the 6-character code typed from the receipt
@@ -156,31 +194,44 @@ export class LoyaltyMemberService {
       });
       if (count === 0) throw new ConflictException({ message: 'Already claimed', reason: 'CLAIMED', order_number: claim.order.order_number });
 
-      await tx.pointsEntry.create({
-        data: {
-          type: PointsEntryType.EARN,
-          points: claim.points,
-          note: `Receipt #${claim.order.order_number}`,
-          member_id: member.id,
-          order_id: claim.order.id,
-          claim_token_id: claim.id,
-        },
-      });
-      return { claim, balance: await this.ledger.balance(member.id, tx) };
+      const firstClaim = (await tx.pointsEntry.count({ where: { member_id: member.id, type: PointsEntryType.EARN } })) === 0;
+      for (const [currency, amount] of [
+        [LoyaltyCurrency.POINTS, claim.points],
+        [LoyaltyCurrency.STAMPS, claim.stamps],
+      ] as const) {
+        if (amount <= 0) continue;
+        await tx.pointsEntry.create({
+          data: {
+            type: PointsEntryType.EARN,
+            currency,
+            points: amount,
+            note: `Receipt #${claim.order.order_number}`,
+            member_id: member.id,
+            order_id: claim.order.id,
+            claim_token_id: claim.id,
+          },
+        });
+      }
+      const welcome = firstClaim ? await this.perks.welcomeInTx(tx, member.id, WelcomeTrigger.FIRST_CLAIM) : null;
+      return { claim, welcome, balances: await this.ledger.balances(member.id, tx) };
     });
 
-    void this.pushReceipt(member.line_user_id, result.claim.order.id, result.claim.points, result.balance.balance);
+    void this.pushReceipt(member.line_user_id, result.claim.order.id, result.claim.points, result.claim.stamps, result.balances.points.balance);
 
     return {
       points: result.claim.points,
+      stamps: result.claim.stamps,
+      lines: (result.claim.lines as unknown as EarnLine[] | null) ?? [],
+      welcome: result.welcome,
       order_number: result.claim.order.order_number,
       total_satang: result.claim.total_satang,
       paid_at: result.claim.order.paid_at,
-      ...result.balance,
+      ...result.balances.points,
+      stamp_balance: result.balances.stamps,
     };
   }
 
-  private async pushReceipt(to: string, orderId: string, points: number, balance: number) {
+  private async pushReceipt(to: string, orderId: string, points: number, stamps: number, balance: number) {
     try {
       const order = await this.prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: { order_item: { orderBy: { create_at: 'asc' } } } });
       await this.line.push(to, [
@@ -192,6 +243,7 @@ export class LoyaltyMemberService {
           discountSatang: order.discount_satang,
           totalSatang: order.total_satang,
           points,
+          stamps,
           balance,
           cardUrl: this.orders.liffUrl() ?? '',
         }),
@@ -201,36 +253,52 @@ export class LoyaltyMemberService {
     }
   }
 
-  // Rewards list with what this member can afford, plus any code they're showing now
+  // Rewards (points or stamps) with what this member can afford, their coupons, and any code on screen now
   async rewards(user: LineIdentity) {
     const member = await this.member(user);
-    const [balance, rewards, active] = await Promise.all([
-      this.ledger.balance(member.id),
+    const now = new Date();
+    const balances = await this.ledger.balances(member.id);
+    const [rewards, coupons, active] = await Promise.all([
       this.prisma.reward.findMany({
-        where: { is_active: true },
+        where: { is_active: true, ...this.inWindow(now) },
         orderBy: [{ sort_order: 'asc' }, { cost_points: 'asc' }],
         include: { product: { select: { name: true, image_url: true } } },
       }),
+      this.prisma.memberCoupon.findMany({
+        where: { member_id: member.id, used_at: null, valid_until: { gt: now } },
+        orderBy: { valid_until: 'asc' },
+        include: { reward: { include: { product: { select: { image_url: true } } } } },
+      }),
       this.prisma.rewardCode.findFirst({
-        where: { member_id: member.id, status: RewardCodeStatus.ACTIVE, expires_at: { gt: new Date() } },
+        where: { member_id: member.id, status: RewardCodeStatus.ACTIVE, expires_at: { gt: now } },
         orderBy: { create_at: 'desc' },
       }),
     ]);
+    const available = (c: LoyaltyCurrency) => (c === LoyaltyCurrency.STAMPS ? balances.stamps : balances.points).available;
     return {
-      ...balance,
+      ...balances.points,
+      stamps: balances.stamps,
       rewards: rewards.map((r) => ({
         id: r.id,
         name: r.name,
         cost_points: r.cost_points,
+        cost_currency: r.cost_currency,
         type: r.type,
         image_url: r.image_url ?? r.product?.image_url ?? null,
-        affordable: balance.available >= r.cost_points,
+        affordable: available(r.cost_currency) >= r.cost_points,
+      })),
+      coupons: coupons.map((c) => ({
+        id: c.id,
+        source: c.source,
+        reward_name: c.reward.name,
+        image_url: c.reward.image_url ?? c.reward.product?.image_url ?? null,
+        valid_until: c.valid_until,
       })),
       active_code: active && this.codeView(active),
     };
   }
 
-  private codeView(c: { code: string; seed: string; reward_name: string; cost_points: number; expires_at: Date; status: RewardCodeStatus }) {
+  private codeView(c: { code: string; seed: string; reward_name: string; cost_points: number; cost_currency: LoyaltyCurrency; coupon_id: string | null; expires_at: Date; status: RewardCodeStatus }) {
     return {
       code: c.code,
       display_code: formatCode(c.code),
@@ -238,11 +306,20 @@ export class LoyaltyMemberService {
       period_s: REWARD_QR_PERIOD_S,
       reward_name: c.reward_name,
       cost_points: c.cost_points,
+      cost_currency: c.cost_currency,
+      from_coupon: c.coupon_id !== null,
       expires_at: c.expires_at,
     };
   }
 
-  // Confirm a reward: issues a code that holds the points until it's used, cancelled or expires.
+  // a fresh 6-character code not used by any reward code
+  private async freeCode(tx: Prisma.TransactionClient) {
+    let short = randomCode();
+    while (await tx.rewardCode.findUnique({ where: { code: short }, select: { id: true } })) short = randomCode();
+    return short;
+  }
+
+  // Confirm a reward: issues a code that holds its points/stamps until it's used, cancelled or expires.
   // Showing a new code cancels the member's previous one.
   async redeem(user: LineIdentity, rewardId: string) {
     const member = await this.member(user);
@@ -250,30 +327,68 @@ export class LoyaltyMemberService {
 
     const code = await this.prisma.$transaction(async (tx) => {
       await this.ledger.lockMember(tx, member.id);
-      const reward = await tx.reward.findUnique({ where: { id: rewardId } });
-      if (!reward || !reward.is_active) throw new NotFoundException({ message: 'Reward not available', reason: 'NOT_FOUND' });
+      const reward = await tx.reward.findFirst({ where: { id: rewardId, is_active: true, ...this.inWindow(new Date()) } });
+      if (!reward) throw new NotFoundException({ message: 'Reward not available', reason: 'NOT_FOUND' });
 
       await tx.rewardCode.updateMany({
         where: { member_id: member.id, status: RewardCodeStatus.ACTIVE },
         data: { status: RewardCodeStatus.CANCELLED, cancelled_at: new Date() },
       });
-      const { available } = await this.ledger.balance(member.id, tx);
+      const { available } = await this.ledger.balance(member.id, tx, reward.cost_currency);
       if (available < reward.cost_points) {
         throw new ConflictException({ message: 'Not enough points', reason: 'NOT_ENOUGH', available, cost_points: reward.cost_points });
       }
 
-      let short = randomCode();
-      while (await tx.rewardCode.findUnique({ where: { code: short }, select: { id: true } })) short = randomCode();
-
       return await tx.rewardCode.create({
         data: {
-          code: short,
+          code: await this.freeCode(tx),
           seed: randomSeed(),
           reward_name: reward.name,
           cost_points: reward.cost_points,
+          cost_currency: reward.cost_currency,
           expires_at: new Date(Date.now() + program.reward_code_minutes * 60 * 1000),
           member_id: member.id,
           reward_id: reward.id,
+        },
+      });
+    });
+
+    return { ...this.codeView(code), ...(await this.ledger.balance(member.id, this.prisma, code.cost_currency)) };
+  }
+
+  // Use a wallet coupon: same rotating QR as a bought reward, costs nothing; the coupon is spent when the order is paid
+  async useCoupon(user: LineIdentity, couponId: string) {
+    const member = await this.member(user);
+    const program = await this.program.get();
+
+    const code = await this.prisma.$transaction(async (tx) => {
+      await this.ledger.lockMember(tx, member.id);
+      const coupon = await tx.memberCoupon.findUnique({ where: { id: couponId }, include: { reward: true, reward_code: true } });
+      if (!coupon || coupon.member_id !== member.id || coupon.used_at || coupon.valid_until <= new Date()) {
+        throw new NotFoundException({ message: 'Coupon not available', reason: 'NOT_FOUND' });
+      }
+      if (coupon.reward_code?.status === RewardCodeStatus.APPLIED) {
+        throw new ConflictException({ message: 'This coupon is on an order at the counter', reason: 'APPLIED' });
+      }
+      // cancel whatever the member is showing now, and let an earlier code of this coupon go
+      await tx.rewardCode.updateMany({
+        where: { member_id: member.id, status: RewardCodeStatus.ACTIVE },
+        data: { status: RewardCodeStatus.CANCELLED, cancelled_at: new Date() },
+      });
+      await tx.rewardCode.updateMany({ where: { coupon_id: coupon.id }, data: { coupon_id: null } });
+
+      const expires = Math.min(Date.now() + program.reward_code_minutes * 60 * 1000, coupon.valid_until.getTime());
+      return await tx.rewardCode.create({
+        data: {
+          code: await this.freeCode(tx),
+          seed: randomSeed(),
+          reward_name: coupon.reward.name,
+          cost_points: 0,
+          cost_currency: coupon.reward.cost_currency,
+          expires_at: new Date(expires),
+          member_id: member.id,
+          reward_id: coupon.reward_id,
+          coupon_id: coupon.id,
         },
       });
     });
@@ -293,7 +408,7 @@ export class LoyaltyMemberService {
       cost_points: code.cost_points,
       used_at: code.used_at,
       order_number: code.order?.order_number ?? null,
-      ...(await this.ledger.balance(member.id)),
+      ...(await this.ledger.balance(member.id, this.prisma, code.cost_currency)),
     };
   }
 
@@ -306,7 +421,7 @@ export class LoyaltyMemberService {
       data: { status: RewardCodeStatus.CANCELLED, cancelled_at: new Date() },
     });
     if (count === 0) throw new ConflictException({ message: 'Code can no longer be cancelled', reason: code.status });
-    return await this.ledger.balance(member.id);
+    return await this.ledger.balance(member.id, this.prisma, code.cost_currency);
   }
 
   private async ownCode(memberId: string, codeInput: string) {
