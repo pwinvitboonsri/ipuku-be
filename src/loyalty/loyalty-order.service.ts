@@ -67,12 +67,13 @@ export class LoyaltyOrderService {
       include: {
         member: true,
         reward: { include: { product: { select: { id: true, name: true } } } },
-        order: { select: { order_number: true } },
+        order: { select: { id: true, order_number: true } },
       },
     });
     if (!code) throw new NotFoundException({ message: 'Reward code not found', reason: 'NOT_FOUND' });
 
     this.assertUsable(code);
+    await this.assertAffordable(code.member_id);
     // a scanned QR must be the live one; a typed code has no token to check
     if (parsed.token && !verifyRewardToken(code.seed, parsed.token, Date.now())) {
       throw new BadRequestException({ message: 'This QR has changed — scan the screen again', reason: 'STALE_QR' });
@@ -91,12 +92,26 @@ export class LoyaltyOrderService {
     };
   }
 
-  private assertUsable(code: { status: RewardCodeStatus; expires_at: Date; used_at: Date | null; order?: { order_number: number } | null }) {
+  // The code's points are already held; a refund since then may have pushed the balance below zero.
+  // Decided: a negative balance can't redeem, even with a code already on screen.
+  private async assertAffordable(memberId: string, db: Prisma.TransactionClient = this.prisma) {
+    const { available } = await this.ledger.balance(memberId, db);
+    if (available < 0) {
+      throw new ConflictException({ message: "The member's points went below zero after a refund — this reward can't be used now", reason: 'NOT_ENOUGH' });
+    }
+  }
+
+  private assertUsable(code: { status: RewardCodeStatus; expires_at: Date; used_at: Date | null; order?: { id: string; order_number: number } | null }) {
     switch (code.status) {
       case RewardCodeStatus.USED:
         throw new ConflictException({ message: 'Code already used', reason: 'USED', used_at: code.used_at });
       case RewardCodeStatus.APPLIED:
-        throw new ConflictException({ message: `Code is already on order #${code.order?.order_number ?? '?'}`, reason: 'APPLIED' });
+        throw new ConflictException({
+          message: `Code is already on open order #${code.order?.order_number ?? '?'}`,
+          reason: 'APPLIED',
+          order_id: code.order?.id ?? null,
+          order_number: code.order?.order_number ?? null,
+        });
       case RewardCodeStatus.CANCELLED:
         throw new ConflictException({ message: 'Code was cancelled', reason: 'CANCELLED' });
     }
@@ -108,9 +123,11 @@ export class LoyaltyOrderService {
   // Order create: the discount a reward code gives on these lines (the API decides, not the POS)
   async discountInTx(tx: Prisma.TransactionClient, codeInput: string, lines: DiscountLine[], subtotalSatang: number) {
     const parsed = parseRewardInput(codeInput);
-    const code = parsed && (await tx.rewardCode.findUnique({ where: { code: parsed.code }, include: { reward: true, order: { select: { order_number: true } } } }));
+    const code = parsed && (await tx.rewardCode.findUnique({ where: { code: parsed.code }, include: { reward: true, order: { select: { id: true, order_number: true } } } }));
     if (!code) throw new NotFoundException({ message: 'Reward code not found', reason: 'NOT_FOUND' });
     this.assertUsable(code);
+    await this.ledger.lockMember(tx, code.member_id);
+    await this.assertAffordable(code.member_id, tx);
 
     const discount = rewardDiscount(code.reward, lines, subtotalSatang);
     if (discount === null) {

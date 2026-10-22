@@ -60,4 +60,12 @@ describe('validateTenders', () => {
       ]),
     ).toThrow('Tender 5000 is less than cash amount 8000');
   });
+
+  it('pays a ฿0 order (fully covered by a reward) with no tenders', () => {
+    expect(validateTenders(0, [])).toEqual([]);
+  });
+
+  it('still needs a tender when something is owed', () => {
+    expect(() => validateTenders(6500, [])).toThrow('At least one payment is required');
+  });
 });

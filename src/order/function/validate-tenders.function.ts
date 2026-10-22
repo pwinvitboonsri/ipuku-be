@@ -23,6 +23,12 @@ export function validateTenders(
   total: number,
   payments: TenderInput[],
 ): TenderRow[] {
+  // a reward can cover the whole order: nothing to collect, no Payment rows
+  if (total === 0 && payments.length === 0) return [];
+  if (payments.length === 0) {
+    throw new BadRequestException('At least one payment is required');
+  }
+
   const cash = payments.filter((p) => p.method === PaymentType.CASH);
   if (cash.length > 1) {
     throw new BadRequestException('Only one cash part is allowed per payment');

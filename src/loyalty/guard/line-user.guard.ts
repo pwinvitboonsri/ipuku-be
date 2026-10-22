@@ -33,7 +33,8 @@ export class LineUserGuard implements CanActivate {
 
     const user = await this.line.verifyIdToken(token);
     if (this.cache.size >= CACHE_MAX) this.cache.delete(this.cache.keys().next().value!);
-    this.cache.set(key, { user, until: now + CACHE_MS });
+    // never past the token's own expiry: LINE would reject it from then on
+    this.cache.set(key, { user, until: Math.min(now + CACHE_MS, user.expiresAt) });
     req.lineUser = user;
     return true;
   }

@@ -10,7 +10,6 @@ import {
 import { SkipThrottle } from '@nestjs/throttler';
 import { LineEnabledGuard } from './guard/line-enabled.guard.js';
 import { LineSignatureGuard } from './guard/line-signature.guard.js';
-import { RecentIds } from './function/recent-ids.function.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { Prisma } from '../generated/prisma/client.js';
 
@@ -28,9 +27,6 @@ interface LineWebhookEvent {
 @Controller('line')
 export class LineWebhookController {
   private readonly logger = new Logger(LineWebhookController.name);
-  // LINE may redeliver an event; one day covers its retry window (the table catches restarts)
-  private readonly seen = new RecentIds(24 * 60 * 60 * 1000);
-
   constructor(private readonly prisma: PrismaService) {}
 
   @Post('webhook')
@@ -38,28 +34,28 @@ export class LineWebhookController {
   async webhook(@Body() body: { destination?: string; events?: LineWebhookEvent[] }) {
     // the console's "Verify" button sends an empty events array
     for (const event of body.events ?? []) {
-      if (event.webhookEventId && !(await this.firstTime(event))) {
-        this.logger.log(`Duplicate event ${event.webhookEventId} skipped`);
+      const id = event.webhookEventId;
+      if (id && (await this.prisma.lineWebhookEvent.findUnique({ where: { id } }))) {
+        this.logger.log(`Duplicate event ${id} skipped`);
         continue;
       }
       this.logger.log(
         `Event ${event.type} from ${event.source?.type}:${event.source?.userId ?? '-'}` +
           (event.deliveryContext?.isRedelivery ? ' (redelivery)' : ''),
       );
-      await this.handle(event).catch((err: Error) => this.logger.warn(`Event ${event.type} failed: ${err.message}`));
+      // a failure here is a 500, so LINE redelivers; the event is only recorded once handled
+      await this.handle(event);
+      if (id) await this.markHandled(id, event.type);
     }
     return {};
   }
 
-  private async firstTime(event: LineWebhookEvent): Promise<boolean> {
-    const id = event.webhookEventId!;
-    if (!this.seen.firstSeen(id)) return false;
+  private async markHandled(id: string, type?: string) {
     try {
-      await this.prisma.lineWebhookEvent.create({ data: { id, type: event.type ?? 'unknown' } });
-      return true;
+      await this.prisma.lineWebhookEvent.create({ data: { id, type: type ?? 'unknown' } });
     } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return false;
-      throw err;
+      // a concurrent redelivery got here first; handling is idempotent
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) throw err;
     }
   }
 

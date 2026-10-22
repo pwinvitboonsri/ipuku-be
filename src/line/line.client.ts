@@ -8,6 +8,8 @@ export interface LineIdentity {
   userId: string;
   name: string | null;
   picture: string | null;
+  /// when LINE stops accepting this ID token (ms since epoch)
+  expiresAt: number;
 }
 
 export interface LinePushResult {
@@ -44,6 +46,7 @@ export class LineClient {
       userId: body.sub,
       name: typeof body.name === 'string' ? body.name : null,
       picture: typeof body.picture === 'string' ? body.picture : null,
+      expiresAt: typeof body.exp === 'number' ? body.exp * 1000 : Date.now() + 60_000,
     };
   }
 

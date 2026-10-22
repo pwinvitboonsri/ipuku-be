@@ -145,4 +145,23 @@ describe.skipIf(!url)('loyalty flow (database)', () => {
       expect.stringContaining('ปรับยอดแต้ม'),
     ]);
   });
+
+  it('pays a ฿0 order covered by a reward, and refuses a code once the balance went negative', async () => {
+    const member = await prisma.member.findFirstOrThrow();
+    const latte = await prisma.reward.findFirstOrThrow({ where: { name: 'Free Iced Latte' } });
+    await prisma.pointsEntry.create({ data: { type: 'EARN', points: 20, note: 'test top-up', member_id: member.id } });
+
+    // free latte on an order of just that latte: nothing to collect
+    const code = await members.redeem(ploy, latte.id);
+    const free = await newOrder([latteId], code.code);
+    expect(free.total_satang).toBe(0);
+    await payments.pay({ payments: [] }, free.id, staffId, '127.0.0.1', 'test');
+    expect((await members.codeStatus(ploy, code.code)).status).toBe('USED');
+
+    // a code on screen, then a refund-like reversal takes the balance below zero
+    const held = await members.redeem(ploy, latte.id);
+    await prisma.pointsEntry.create({ data: { type: 'REVERSAL', points: -15, note: 'test reversal', member_id: member.id } });
+    await expect(loyaltyOrders.validate(held.code)).rejects.toMatchObject({ response: { reason: 'NOT_ENOUGH' } });
+    await expect(newOrder([latteId], held.code)).rejects.toMatchObject({ response: { reason: 'NOT_ENOUGH' } });
+  });
 });

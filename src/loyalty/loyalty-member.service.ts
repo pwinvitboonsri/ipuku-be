@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, GoneException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, GoneException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../generated/prisma/client.js';
 import { PointsEntryType, RewardCodeStatus, Status } from '../generated/prisma/enums.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -12,11 +12,15 @@ import { earnMessage } from './function/line-messages.function.js';
 
 const HISTORY = 30;
 const SHOP = 'Ippuku';
+// typed receipt codes can be guessed: tries per member per minute (scanned QR tokens can't)
+const CODE_TRIES = 10;
+const CODE_WINDOW_MS = 60_000;
 
 // What the LIFF app (customer in LINE) can do. Every call carries a verified LINE identity.
 @Injectable()
 export class LoyaltyMemberService {
   private readonly logger = new Logger(LoyaltyMemberService.name);
+  private readonly codeTries = new Map<string, number[]>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -26,32 +30,47 @@ export class LoyaltyMemberService {
     private readonly orders: LoyaltyOrderService,
   ) {}
 
-  // A member who accepted the current consent; refreshes name/photo from the LINE profile
-  private async member(user: LineIdentity) {
+  // A member who accepted the current consent (null otherwise); refreshes name/photo from the LINE profile
+  private async findMember(user: LineIdentity, consentVersion: string) {
     const member = await this.prisma.member.findUnique({ where: { line_user_id: user.userId } });
-    const program = await this.program.get();
-    if (!member || member.consent_version !== program.consent_version) {
-      throw new ForbiddenException({ message: 'Join the program first', reason: 'NOT_MEMBER' });
-    }
+    if (!member || member.consent_version !== consentVersion) return { member: null, found: !!member };
     if (member.display_name !== user.name || member.picture_url !== user.picture) {
-      return await this.prisma.member.update({ where: { id: member.id }, data: { display_name: user.name, picture_url: user.picture } });
+      const fresh = await this.prisma.member.update({ where: { id: member.id }, data: { display_name: user.name, picture_url: user.picture } });
+      return { member: fresh, found: true };
     }
+    return { member, found: true };
+  }
+
+  private async member(user: LineIdentity) {
+    const program = await this.program.get();
+    const { member } = await this.findMember(user, program.consent_version);
+    if (!member) throw new ForbiddenException({ message: 'Join the program first', reason: 'NOT_MEMBER' });
     return member;
+  }
+
+  private checkCodeTries(memberId: string) {
+    const now = Date.now();
+    const recent = (this.codeTries.get(memberId) ?? []).filter((t) => now - t < CODE_WINDOW_MS);
+    if (recent.length >= CODE_TRIES) {
+      throw new HttpException({ message: 'Too many tries — wait a minute', reason: 'TOO_MANY' }, HttpStatus.TOO_MANY_REQUESTS);
+    }
+    recent.push(now);
+    this.codeTries.set(memberId, recent);
+    if (this.codeTries.size > 5000) this.codeTries.delete(this.codeTries.keys().next().value!);
   }
 
   // My Card: membership state, balance, next reward and recent history
   async me(user: LineIdentity) {
     const program = await this.program.get();
-    const found = await this.prisma.member.findUnique({ where: { line_user_id: user.userId } });
+    const { member, found } = await this.findMember(user, program.consent_version);
     const base = {
       profile: { name: user.name, picture: user.picture },
       program: { points_per_unit: program.points_per_unit, unit_satang: program.unit_satang, consent_version: program.consent_version },
     };
-    if (!found || found.consent_version !== program.consent_version) {
+    if (!member) {
       // consented to an older version: same member, asked again
-      return { ...base, member: null, rejoin: !!found };
+      return { ...base, member: null, rejoin: found };
     }
-    const member = await this.member(user);
 
     const [balance, history, rewards] = await Promise.all([
       this.ledger.balance(member.id),
@@ -106,6 +125,7 @@ export class LoyaltyMemberService {
     const member = await this.member(user);
     const code = input.code ? normalizeCode(input.code) : null;
     if (!input.token && !code) throw new BadRequestException({ message: 'Not a receipt code', reason: 'INVALID' });
+    if (!input.token) this.checkCodeTries(member.id);
     const where: Prisma.ClaimTokenWhereUniqueInput = input.token ? { token: input.token } : { code: code! };
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -114,10 +134,14 @@ export class LoyaltyMemberService {
         include: { order: { select: { id: true, order_number: true, status: true, paid_at: true } } },
       });
       if (!claim) throw new NotFoundException({ message: 'Receipt code not found', reason: 'NOT_FOUND' });
+      // lock the order so a refund can't land between this check and the EARN row
+      // (a refund that wins makes it REFUNDED below; one that waits sees the EARN and reverses it)
+      await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${claim.order.id} FOR UPDATE`;
+      const { status } = await tx.order.findUniqueOrThrow({ where: { id: claim.order.id }, select: { status: true } });
       if (claim.claimed_at) {
         throw new ConflictException({ message: 'Already claimed', reason: 'CLAIMED', claimed_at: claim.claimed_at, order_number: claim.order.order_number });
       }
-      if (claim.order.status !== Status.PAID) {
+      if (status !== Status.PAID) {
         throw new GoneException({ message: 'This order was refunded', reason: 'REFUNDED', order_number: claim.order.order_number });
       }
       if (claim.expires_at <= new Date()) {

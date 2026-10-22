@@ -1,5 +1,4 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
 import { LineEnabledGuard } from '../line/guard/line-enabled.guard.js';
 import type { LineIdentity } from '../line/line.client.js';
 import { LineUser, LineUserGuard } from './guard/line-user.guard.js';
@@ -23,8 +22,7 @@ export class LoyaltyMemberController {
     return { success: true, data: await this.members.join(user, dto.consent_version) };
   }
 
-  // typed codes can be guessed: keep tries low
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  // typed codes are limited per member in the service (customers on the shop Wi-Fi share one IP)
   @Post('claim')
   @HttpCode(HttpStatus.OK)
   async claim(@LineUser() user: LineIdentity, @Body() dto: ClaimDTO) {
