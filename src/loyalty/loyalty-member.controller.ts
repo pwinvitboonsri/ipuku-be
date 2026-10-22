@@ -1,9 +1,9 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
 import { LineEnabledGuard } from '../line/guard/line-enabled.guard.js';
 import type { LineIdentity } from '../line/line.client.js';
 import { LineUser, LineUserGuard } from './guard/line-user.guard.js';
 import { LoyaltyMemberService } from './loyalty-member.service.js';
-import { ClaimDTO, JoinDTO } from './dto/member-requests.dto.js';
+import { ClaimDTO, HistoryDTO, JoinDTO } from './dto/member-requests.dto.js';
 
 // Called by the LIFF app in LINE with "Authorization: Bearer <LINE ID token>"
 @UseGuards(LineEnabledGuard, LineUserGuard)
@@ -14,6 +14,11 @@ export class LoyaltyMemberController {
   @Get()
   async me(@LineUser() user: LineIdentity) {
     return { success: true, data: await this.members.me(user) };
+  }
+
+  @Get('history')
+  async history(@LineUser() user: LineIdentity, @Query() dto: HistoryDTO) {
+    return { success: true, data: await this.members.history(user, dto.before) };
   }
 
   @Post('join')

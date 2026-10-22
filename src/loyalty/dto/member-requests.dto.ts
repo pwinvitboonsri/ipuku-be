@@ -1,4 +1,4 @@
-import { IsInt, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min, ValidateIf } from 'class-validator';
+import { IsInt, IsUUID, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 
 export class JoinDTO {
   @IsNotEmpty()
@@ -39,4 +39,11 @@ export class ValidateRewardDTO {
   @IsString()
   @MaxLength(64)
   input: string;
+}
+
+// next page of the points history: entries older than this one
+export class HistoryDTO {
+  @IsOptional()
+  @IsUUID()
+  before?: string;
 }

@@ -1,19 +1,22 @@
 import { BadRequestException, ConflictException, ForbiddenException, GoneException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../generated/prisma/client.js';
-import { LoyaltyCurrency, PointsEntryType, RewardCodeStatus, Status, WelcomeTrigger } from '../generated/prisma/enums.js';
+import { LoyaltyCurrency, PerkKind, PointsEntryType, RewardCodeStatus, Status, WelcomeTrigger } from '../generated/prisma/enums.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LineClient, LineIdentity } from '../line/line.client.js';
 import { LoyaltyLedgerService } from './loyalty-ledger.service.js';
 import { LoyaltyProgramService } from './loyalty-program.service.js';
 import { LoyaltyOrderService } from './loyalty-order.service.js';
 import { LoyaltyPerksService } from './loyalty-perks.service.js';
-import type { EarnLine } from './function/compute-earn.function.js';
+import { ruleInSchedule, type EarnLine } from './function/compute-earn.function.js';
 import { validBirthday } from './function/birthday.function.js';
 import { formatCode, memberLabel, normalizeCode, randomCode, randomSeed } from './function/loyalty-codes.function.js';
 import { REWARD_QR_PERIOD_S } from './function/reward-qr.function.js';
 import { earnMessage } from './function/line-messages.function.js';
 
 const HISTORY = 30;
+const HISTORY_PAGE = 30;
+// promotions starting within this many days show as "coming soon"
+const PROMO_AHEAD_MS = 14 * 86_400_000;
 const SHOP = 'Ippuku';
 // typed receipt codes can be guessed: tries per member per minute (scanned QR tokens can't)
 const CODE_TRIES = 10;
@@ -87,7 +90,8 @@ export class LoyaltyMemberService {
     }
 
     const balances = await this.ledger.balances(member.id);
-    const [history, rewards, coupons] = await Promise.all([
+    const now = new Date();
+    const [history, rewards, coupons, stats, promos, birthdayPerk] = await Promise.all([
       this.prisma.pointsEntry.findMany({
         where: { member_id: member.id },
         orderBy: { create_at: 'desc' },
@@ -96,6 +100,9 @@ export class LoyaltyMemberService {
       }),
       this.prisma.reward.findMany({ where: { is_active: true, ...this.inWindow(new Date()) }, orderBy: [{ cost_points: 'asc' }] }),
       this.prisma.memberCoupon.count({ where: { member_id: member.id, used_at: null, valid_until: { gt: new Date() } } }),
+      this.stats(member.id),
+      this.promos(now),
+      this.prisma.loyaltyPerk.findUnique({ where: { kind: PerkKind.BIRTHDAY }, include: { reward: { select: { name: true } } } }),
     ]);
     const nextOf = (currency: LoyaltyCurrency, available: number) => {
       const next = rewards.find((r) => r.cost_currency === currency && r.cost_points > available);
@@ -115,6 +122,13 @@ export class LoyaltyMemberService {
         ...balances.points,
         stamps: balances.stamps,
       },
+      stats,
+      promos,
+      // what a birthday brings (shown on the profile), when the owner turned it on
+      birthday_perk:
+        birthdayPerk?.is_active && (birthdayPerk.grant_points || birthdayPerk.grant_stamps || birthdayPerk.reward)
+          ? { points: birthdayPerk.grant_points, stamps: birthdayPerk.grant_stamps, reward_name: birthdayPerk.reward?.name ?? null }
+          : null,
       next_reward: nextOf(LoyaltyCurrency.POINTS, balances.points.available),
       next_stamp_reward: nextOf(LoyaltyCurrency.STAMPS, balances.stamps.available),
       history: history.map((e) => ({
@@ -126,6 +140,95 @@ export class LoyaltyMemberService {
         order_number: e.order?.order_number ?? null,
         create_at: e.create_at,
       })),
+    };
+  }
+
+  // Lifetime numbers for the member: visits (claimed paid receipts), money spent and saved, points earned
+  private async stats(memberId: string) {
+    const [visits, saved, earned] = await Promise.all([
+      this.prisma.claimToken.aggregate({ where: { member_id: memberId, order: { status: Status.PAID } }, _count: { _all: true }, _sum: { total_satang: true } }),
+      this.prisma.rewardCode.aggregate({ where: { member_id: memberId, status: RewardCodeStatus.USED }, _count: { _all: true }, _sum: { discount_satang: true } }),
+      this.prisma.pointsEntry.aggregate({
+        where: { member_id: memberId, currency: LoyaltyCurrency.POINTS, type: { in: [PointsEntryType.EARN, PointsEntryType.BONUS] } },
+        _sum: { points: true },
+      }),
+    ]);
+    return {
+      visits: visits._count._all,
+      spent_satang: visits._sum.total_satang ?? 0,
+      rewards_used: saved._count._all,
+      saved_satang: saved._sum.discount_satang ?? 0,
+      points_earned: earned._sum.points ?? 0,
+    };
+  }
+
+  // Earn rules a customer can look forward to: running now, later today/this week, or starting soon
+  private async promos(now: Date) {
+    const rules = await this.prisma.earnRule.findMany({
+      where: {
+        is_active: true,
+        AND: [{ OR: [{ starts_at: null }, { starts_at: { lte: new Date(now.getTime() + PROMO_AHEAD_MS) } }] }, { OR: [{ ends_at: null }, { ends_at: { gt: now } }] }],
+      },
+      orderBy: [{ sort_order: 'asc' }, { create_at: 'asc' }],
+    });
+    return rules.map((r) => ({
+      id: r.id,
+      name: r.name,
+      kind: r.kind,
+      multiplier_x10: r.multiplier_x10,
+      amount: r.amount,
+      currency: r.currency,
+      per_item: r.per_item,
+      min_spend_satang: r.min_spend_satang,
+      min_items: r.min_items,
+      filtered: r.product_ids.length + r.category_ids.length > 0,
+      weekdays: r.weekdays,
+      time_from: r.time_from,
+      time_to: r.time_to,
+      starts_at: r.starts_at,
+      ends_at: r.ends_at,
+      live: ruleInSchedule(r, now),
+    }));
+  }
+
+  // Full points/stamps history, newest first, a page at a time (`before` = the last id seen; ids are time-ordered uuid7)
+  async history(user: LineIdentity, before?: string) {
+    const member = await this.member(user);
+    const rows = await this.prisma.pointsEntry.findMany({
+      where: { member_id: member.id, ...(before && { id: { lt: before } }) },
+      orderBy: { id: 'desc' },
+      take: HISTORY_PAGE + 1,
+      include: { order: { select: { order_number: true, total_satang: true } }, reward_code: { select: { reward_name: true, discount_satang: true } } },
+    });
+    const page = rows.slice(0, HISTORY_PAGE);
+    // this month so far (Thailand time), for the header
+    const bkk = new Date(Date.now() + 7 * 3_600_000);
+    const monthStart = new Date(Date.UTC(bkk.getUTCFullYear(), bkk.getUTCMonth(), 1) - 7 * 3_600_000);
+    const month = await this.prisma.pointsEntry.groupBy({
+      by: ['currency', 'type'],
+      where: { member_id: member.id, create_at: { gte: monthStart } },
+      _sum: { points: true },
+    });
+    const sum = (c: LoyaltyCurrency, types: PointsEntryType[]) => month.filter((m) => m.currency === c && types.includes(m.type)).reduce((t, m) => t + (m._sum.points ?? 0), 0);
+    return {
+      entries: page.map((e) => ({
+        id: e.id,
+        type: e.type,
+        currency: e.currency,
+        points: e.points,
+        note: e.note,
+        order_number: e.order?.order_number ?? null,
+        order_total_satang: e.order?.total_satang ?? null,
+        reward_name: e.reward_code?.reward_name ?? null,
+        discount_satang: e.reward_code?.discount_satang ?? null,
+        create_at: e.create_at,
+      })),
+      more: rows.length > HISTORY_PAGE,
+      month: {
+        points_earned: sum(LoyaltyCurrency.POINTS, [PointsEntryType.EARN, PointsEntryType.BONUS]),
+        points_used: -sum(LoyaltyCurrency.POINTS, [PointsEntryType.REDEEM]),
+        stamps_earned: sum(LoyaltyCurrency.STAMPS, [PointsEntryType.EARN, PointsEntryType.BONUS]),
+      },
     };
   }
 
@@ -267,7 +370,7 @@ export class LoyaltyMemberService {
       this.prisma.memberCoupon.findMany({
         where: { member_id: member.id, used_at: null, valid_until: { gt: now } },
         orderBy: { valid_until: 'asc' },
-        include: { reward: { include: { product: { select: { image_url: true } } } } },
+        include: { reward: { include: { product: { select: { name: true, image_url: true } } } } },
       }),
       this.prisma.rewardCode.findFirst({
         where: { member_id: member.id, status: RewardCodeStatus.ACTIVE, expires_at: { gt: now } },
@@ -275,6 +378,21 @@ export class LoyaltyMemberService {
       }),
     ]);
     const available = (c: LoyaltyCurrency) => (c === LoyaltyCurrency.STAMPS ? balances.stamps : balances.points).available;
+    const optionIds = [...new Set([...rewards, ...coupons.map((c) => c.reward)].flatMap((r) => r.option_ids))];
+    const options = optionIds.length ? await this.prisma.modifierOption.findMany({ where: { id: { in: optionIds } }, select: { id: true, name: true } }) : [];
+    // what the reward gives, for the detail sheet
+    const detail = (r: (typeof rewards)[number]) => ({
+      discount_satang: r.discount_satang,
+      percent: r.percent,
+      max_discount_satang: r.max_discount_satang,
+      min_spend_satang: r.min_spend_satang,
+      product_name: r.product?.name ?? null,
+      option_names: options.filter((o) => r.option_ids.includes(o.id)).map((o) => o.name),
+      buy_qty: r.buy_qty,
+      get_qty: r.get_qty,
+      get_percent: r.get_percent,
+      ends_at: r.ends_at,
+    });
     return {
       ...balances.points,
       stamps: balances.stamps,
@@ -286,13 +404,17 @@ export class LoyaltyMemberService {
         type: r.type,
         image_url: r.image_url ?? r.product?.image_url ?? null,
         affordable: available(r.cost_currency) >= r.cost_points,
+        ...detail(r),
       })),
       coupons: coupons.map((c) => ({
         id: c.id,
         source: c.source,
         reward_name: c.reward.name,
+        type: c.reward.type,
         image_url: c.reward.image_url ?? c.reward.product?.image_url ?? null,
         valid_until: c.valid_until,
+        create_at: c.create_at,
+        ...detail(c.reward),
       })),
       active_code: active && this.codeView(active),
     };
