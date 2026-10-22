@@ -1,4 +1,4 @@
-// Deploy: cd ops/keep-warm && npx wrangler deploy
+// Deploy: cd ops/keep-warm && npx wrangler deploy   (secret: npx wrangler secret put JOBS_SECRET)
 {
   "$schema": "https://unpkg.com/wrangler/config-schema.json",
   "name": "ipuku-keep-warm",
@@ -9,5 +9,13 @@
   "vars": { "API_URL": "https://ipuku-api.onrender.com" },
   // UTC (Thailand = UTC+7): every 10 min from 09:45 to 18:00 Thailand time (shop hours 10:00-18:00)
   "triggers": { "crons": ["45,55 2 * * *", "*/10 3-10 * * *", "0 11 * * *"] },
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+  // dev: only the hourly loyalty jobs against the dev API (deploy: npx wrangler deploy --env dev)
+  "env": {
+    "dev": {
+      "name": "ipuku-keep-warm-dev",
+      "vars": { "API_URL": "https://ipuku-api-dev.onrender.com" },
+      "triggers": { "crons": ["0 3-11 * * *"] }
+    }
+  }
 }
