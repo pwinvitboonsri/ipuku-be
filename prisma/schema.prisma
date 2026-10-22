@@ -585,6 +585,8 @@ model Reward {
   discount_satang     Int?
   /// FREE_ITEM: this product (any options) is free, up to max_discount_satang
   max_discount_satang Int?
+  /// photo shown in LINE and the back office (R2 public URL); a free item falls back to its product's photo
+  image_url           String?
   sort_order          Int        @default(0)
   is_active           Boolean    @default(true)
   update_at           DateTime   @default(now()) @updatedAt

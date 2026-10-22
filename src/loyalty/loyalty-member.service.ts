@@ -199,7 +199,7 @@ export class LoyaltyMemberService {
         name: r.name,
         cost_points: r.cost_points,
         type: r.type,
-        image_url: r.product?.image_url ?? null,
+        image_url: r.image_url ?? r.product?.image_url ?? null,
         affordable: balance.available >= r.cost_points,
       })),
       active_code: active && this.codeView(active),

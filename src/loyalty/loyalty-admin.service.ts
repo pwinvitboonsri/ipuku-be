@@ -50,7 +50,7 @@ export class LoyaltyAdminService {
   async listRewards() {
     return await this.prisma.reward.findMany({
       orderBy: [{ is_active: 'desc' }, { sort_order: 'asc' }, { cost_points: 'asc' }],
-      include: { product: { select: { id: true, name: true, price_satang: true } } },
+      include: { product: { select: { id: true, name: true, price_satang: true, image_url: true } } },
     });
   }
 
@@ -65,6 +65,7 @@ export class LoyaltyAdminService {
       product_id: fixed ? null : dto.product_id!,
       max_discount_satang: fixed ? null : dto.max_discount_satang!,
       sort_order: dto.sort_order ?? 0,
+      image_url: dto.image_url ?? null,
     };
   }
 

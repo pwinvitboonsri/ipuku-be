@@ -39,6 +39,12 @@ export class CreateRewardDTO {
   @Min(0)
   @Max(1000)
   sort_order?: number;
+
+  // an uploaded image's public_url (POST /product/image-upload), or null for none
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  image_url?: string | null;
 }
 
 export class UpdateRewardDTO extends CreateRewardDTO {}
