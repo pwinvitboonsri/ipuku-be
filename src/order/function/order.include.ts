@@ -15,6 +15,7 @@ export const orderInclude = {
       token: true,
       code: true,
       points: true,
+      stamps: true,
       expires_at: true,
       claimed_at: true,
       member: { select: { member_no: true, display_name: true } },
