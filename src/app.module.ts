@@ -27,6 +27,7 @@ import { PushModule } from './push/push.module.js';
 import { GrabModule } from './grab/grab.module.js';
 import { LineModule } from './line/line.module.js';
 import { LoyaltyModule } from './loyalty/loyalty.module.js';
+import { ReportModule } from './report/report.module.js';
 
 @Module({
   imports: [
@@ -65,6 +66,7 @@ import { LoyaltyModule } from './loyalty/loyalty.module.js';
     GrabModule,
     LineModule,
     LoyaltyModule,
+    ReportModule,
   ],
   controllers: [],
   providers: [
