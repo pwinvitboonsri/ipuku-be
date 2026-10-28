@@ -37,6 +37,19 @@ function eligible(reward: DiscountReward, lines: DiscountLine[]) {
   return lines.filter((l) => products.includes(l.product_id) || (l.category_id != null && categories.includes(l.category_id)));
 }
 
+/// a unit's price without the options added to it
+export const basePrice = (l: DiscountLine) => l.unit_price_satang - (l.options ?? []).reduce((n, o) => n + o.price_delta_satang, 0);
+
+/// lines a free-item reward can take: its product, or any of its products / categories
+export function freeItemLines(reward: DiscountReward, lines: DiscountLine[]) {
+  return lines.filter(
+    (l) =>
+      l.product_id === reward.product_id ||
+      (reward.product_ids ?? []).includes(l.product_id) ||
+      (l.category_id != null && (reward.category_ids ?? []).includes(l.category_id)),
+  );
+}
+
 // The discount a reward gives on these lines — never more than the subtotal. Decided by the API at order create.
 export function rewardDiscount(reward: DiscountReward, lines: DiscountLine[], subtotalSatang: number): DiscountResult {
   if (reward.min_spend_satang && subtotalSatang < reward.min_spend_satang) return { ok: false, reason: 'MIN_SPEND' };
@@ -46,8 +59,9 @@ export function rewardDiscount(reward: DiscountReward, lines: DiscountLine[], su
       return { ok: true, amount: cap(reward.discount_satang ?? 0, null, subtotalSatang) };
 
     case RewardType.FREE_ITEM: {
-      // the priciest matching unit (any options), capped
-      const prices = lines.filter((l) => l.product_id === reward.product_id).map((l) => l.unit_price_satang);
+      // one unit of the item at its base price: paid extras (size-up, oat milk) stay on the bill.
+      // The priciest matching unit if several, capped.
+      const prices = freeItemLines(reward, lines).map((l) => basePrice(l));
       if (prices.length === 0) return { ok: false, reason: 'ITEM_MISSING' };
       return { ok: true, amount: cap(Math.max(...prices), reward.max_discount_satang, subtotalSatang) };
     }

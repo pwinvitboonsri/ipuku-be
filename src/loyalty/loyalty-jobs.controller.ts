@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { SkipThrottle } from '@nestjs/throttler';
 import { timingSafeEqual } from 'node:crypto';
 import { LoyaltyPerksService } from './loyalty-perks.service.js';
+import { LoyaltyOrderService } from './loyalty-order.service.js';
 
 // Only the scheduler (ops/keep-warm cron worker) knows JOBS_SECRET; off until it's set
 @Injectable()
@@ -24,12 +25,17 @@ export class JobsSecretGuard implements CanActivate {
 @UseGuards(JobsSecretGuard)
 @Controller('loyalty/jobs')
 export class LoyaltyJobsController {
-  constructor(private readonly perks: LoyaltyPerksService) {}
+  constructor(
+    private readonly perks: LoyaltyPerksService,
+    private readonly orders: LoyaltyOrderService,
+  ) {}
 
   // Once a day (safe to run more often: every grant is once per member per period)
   @Post('daily')
   @HttpCode(HttpStatus.OK)
   async daily() {
+    // rewards a counter held and never used go back to their members (also done lazily on every read)
+    await this.orders.releaseLapsed();
     const birthdays = await this.perks.runBirthdays();
     return { success: true, data: { birthdays } };
   }

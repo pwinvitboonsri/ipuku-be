@@ -166,6 +166,47 @@ describe.skipIf(!url)('loyalty flow (database)', () => {
     await expect(loyaltyOrders.validate(held.code)).rejects.toMatchObject({ response: { reason: 'NOT_ENOUGH' } });
     await expect(newOrder([latteId], held.code)).rejects.toMatchObject({ response: { reason: 'NOT_ENOUGH' } });
   });
+
+  it('scan first: the counter holds the reward, and every way out gives it back to the customer', async () => {
+    const member = await prisma.member.findFirstOrThrow();
+    const latte = await prisma.reward.findFirstOrThrow({ where: { name: 'Free Iced Latte' } });
+    await prisma.pointsEntry.create({ data: { type: 'EARN', points: 40, note: 'test top-up', member_id: member.id } });
+    const live = (c: { code: string; seed: string }) => rewardQrPayload(c.code, rewardToken(c.seed, rewardWindow(Date.now())));
+
+    // scanned before anything is in the cart: held (points stay held), customer can't cancel it now
+    const code = await members.redeem(ploy, latte.id);
+    const held = await loyaltyOrders.reserve(live(code));
+    expect(held.reward_name).toBe('Free Iced Latte');
+    expect((await members.codeStatus(ploy, code.code)).status).toBe('APPLIED');
+    expect((await ledger.balance(member.id)).held).toBe(10);
+    await expect(members.cancelCode(ploy, code.code)).rejects.toMatchObject({ response: { reason: 'APPLIED' } });
+    // re-scanning at the same counter is fine
+    await expect(loyaltyOrders.reserve(code.code)).resolves.toMatchObject({ code: code.code });
+
+    // staff take it off the cart → back on the customer's screen with fresh minutes
+    expect(await loyaltyOrders.release(code.code)).toEqual({ released: true });
+    const back = await members.codeStatus(ploy, code.code);
+    expect(back.status).toBe('ACTIVE');
+
+    // a hold nobody finished (tablet closed) runs out → back to the customer on their next look
+    await loyaltyOrders.reserve(code.code);
+    await prisma.rewardCode.update({ where: { code: code.code }, data: { reserved_until: new Date(Date.now() - 1000) } });
+    expect((await members.rewards(ploy)).active_code?.status).toBe('ACTIVE');
+
+    // scan first, then the latte is added: the order takes the held code; a void gives it back
+    await loyaltyOrders.reserve(code.code);
+    const order = await newOrder([latteId], code.code);
+    expect(order.discount_satang).toBe(8000);
+    await orders.void({ reason: 'customer left' }, order.id, staffId, '127.0.0.1', 'test');
+    expect((await members.codeStatus(ploy, code.code)).status).toBe('ACTIVE');
+
+    // held, then the customer's code is used on an order and paid
+    await loyaltyOrders.reserve(code.code);
+    const paidOrder = await newOrder([latteId, croissantId], code.code);
+    await payCash(paidOrder.id, paidOrder.total_satang);
+    expect((await members.codeStatus(ploy, code.code)).status).toBe('USED');
+    await expect(loyaltyOrders.release(code.code)).resolves.toEqual({ released: false });
+  });
 });
 
 describe.skipIf(!url)('loyalty v2: earn rules, perks, stamps and new reward types (database)', () => {

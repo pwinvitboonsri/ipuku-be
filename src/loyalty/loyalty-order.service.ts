@@ -17,6 +17,9 @@ export interface PaidLoyalty {
   redeemed: { memberId: string; rewardName: string; cost: number; currency: LoyaltyCurrency; orderNumber: number } | null;
 }
 
+// how long a reward scanned at the counter is held before its order is created
+const RESERVE_MS = 30 * 60 * 1000;
+
 export interface RefundLoyalty {
   orderNumber: number;
   deltas: Map<string, number>;
@@ -56,9 +59,62 @@ export class LoyaltyOrderService {
     return { ...order, claim_token: { ...rest, url: this.claimUrl(token), display_code: formatCode(rest.code) } };
   }
 
-  // POS "Scan reward": a scanned rotating QR or a typed fallback code. Locks nothing yet;
-  // the code is attached when the order is created.
+  // POS "Scan reward": a scanned rotating QR or a typed fallback code. Checks only; reserve() holds it.
   async validate(input: string) {
+    await this.releaseLapsed();
+    const { code } = await this.scanned(input);
+    return this.scanView(code);
+  }
+
+  // POS "Scan reward" (scan first): holds the code for this counter before the order exists, so it
+  // can't expire or be used twice while staff build the order. Not tied to an order yet (APPLIED, no order).
+  // Re-scanning a code this counter already holds just extends the hold.
+  async reserve(input: string) {
+    await this.releaseLapsed();
+    const { code } = await this.scanned(input, { allowReserved: true });
+    const until = new Date(Date.now() + RESERVE_MS);
+    const { count } = await this.prisma.rewardCode.updateMany({
+      where: {
+        id: code.id,
+        OR: [{ status: RewardCodeStatus.ACTIVE, expires_at: { gt: new Date() } }, { status: RewardCodeStatus.APPLIED, order_id: null }],
+      },
+      data: { status: RewardCodeStatus.APPLIED, applied_at: new Date(), reserved_until: until },
+    });
+    if (count === 0) throw new ConflictException({ message: 'Reward code is no longer valid', reason: 'CHANGED' });
+    return { ...this.scanView(code), reserved_until: until };
+  }
+
+  // Staff took the reward off the order (or cleared it): it goes back to the customer's screen
+  async release(codeInput: string) {
+    const parsed = parseRewardInput(codeInput);
+    if (!parsed) throw new BadRequestException({ message: 'Not a reward code', reason: 'INVALID' });
+    const { count } = await this.prisma.rewardCode.updateMany({
+      where: { code: parsed.code, status: RewardCodeStatus.APPLIED, order_id: null },
+      data: await this.backToCustomer(),
+    });
+    return { released: count > 0 };
+  }
+
+  // Counter holds that ran out (tablet closed, cart abandoned) go back to the customer: nothing is lost
+  async releaseLapsed(db: Prisma.TransactionClient = this.prisma) {
+    await db.rewardCode.updateMany({
+      where: { status: RewardCodeStatus.APPLIED, order_id: null, reserved_until: { lte: new Date() } },
+      data: await this.backToCustomer(db),
+    });
+  }
+
+  // ACTIVE again, with a fresh few minutes on the customer's screen to show it
+  private async backToCustomer(db: Prisma.TransactionClient = this.prisma) {
+    const program = await this.program.get(db);
+    return {
+      status: RewardCodeStatus.ACTIVE,
+      applied_at: null,
+      reserved_until: null,
+      expires_at: new Date(Date.now() + program.reward_code_minutes * 60 * 1000),
+    };
+  }
+
+  private async scanned(input: string, opts: { allowReserved?: boolean } = {}) {
     const parsed = parseRewardInput(input);
     if (!parsed) throw new BadRequestException({ message: 'Not a reward code', reason: 'INVALID' });
 
@@ -72,13 +128,16 @@ export class LoyaltyOrderService {
     });
     if (!code) throw new NotFoundException({ message: 'Reward code not found', reason: 'NOT_FOUND' });
 
-    this.assertUsable(code);
+    this.assertUsable(code, opts.allowReserved);
     await this.assertAffordable(code.member_id, code.cost_currency);
     // a scanned QR must be the live one; a typed code has no token to check
     if (parsed.token && !verifyRewardToken(code.seed, parsed.token, Date.now())) {
       throw new BadRequestException({ message: 'This QR has changed — scan the screen again', reason: 'STALE_QR' });
     }
+    return { code };
+  }
 
+  private scanView(code: Prisma.RewardCodeGetPayload<{ include: { member: true; reward: { include: { product: { select: { id: true; name: true } } } } } }>) {
     const r = code.reward;
     return {
       code: code.code,
@@ -112,7 +171,12 @@ export class LoyaltyOrderService {
     }
   }
 
-  private assertUsable(code: { status: RewardCodeStatus; expires_at: Date; used_at: Date | null; order?: { id: string; order_number: number } | null }) {
+  // allowReserved: a code held at the counter with no order yet is fine (order create, re-scan)
+  private assertUsable(
+    code: { status: RewardCodeStatus; expires_at: Date; used_at: Date | null; order_id?: string | null; order?: { id: string; order_number: number } | null },
+    allowReserved = false,
+  ) {
+    if (allowReserved && code.status === RewardCodeStatus.APPLIED && !code.order_id) return;
     switch (code.status) {
       case RewardCodeStatus.USED:
         throw new ConflictException({ message: 'Code already used', reason: 'USED', used_at: code.used_at });
@@ -136,7 +200,7 @@ export class LoyaltyOrderService {
     const parsed = parseRewardInput(codeInput);
     const code = parsed && (await tx.rewardCode.findUnique({ where: { code: parsed.code }, include: { reward: true, order: { select: { id: true, order_number: true } } } }));
     if (!code) throw new NotFoundException({ message: 'Reward code not found', reason: 'NOT_FOUND' });
-    this.assertUsable(code);
+    this.assertUsable(code, true);
     await this.ledger.lockMember(tx, code.member_id);
     await this.assertAffordable(code.member_id, code.cost_currency, tx);
 
@@ -151,11 +215,15 @@ export class LoyaltyOrderService {
     return { rewardCodeId: code.id, discountSatang: result.amount };
   }
 
-  // Order create, after the row exists: lock the code to it (fails if it changed since the check)
+  // Order create, after the row exists: lock the code to it (fails if it changed since the check).
+  // Takes a code shown on the customer's screen or one this counter reserved.
   async attachInTx(tx: Prisma.TransactionClient, rewardCodeId: string, orderId: string, discountSatang: number) {
     const { count } = await tx.rewardCode.updateMany({
-      where: { id: rewardCodeId, status: RewardCodeStatus.ACTIVE, expires_at: { gt: new Date() } },
-      data: { status: RewardCodeStatus.APPLIED, order_id: orderId, applied_at: new Date(), discount_satang: discountSatang },
+      where: {
+        id: rewardCodeId,
+        OR: [{ status: RewardCodeStatus.ACTIVE, expires_at: { gt: new Date() } }, { status: RewardCodeStatus.APPLIED, order_id: null }],
+      },
+      data: { status: RewardCodeStatus.APPLIED, order_id: orderId, applied_at: new Date(), reserved_until: null, discount_satang: discountSatang },
     });
     if (count === 0) throw new ConflictException({ message: 'Reward code is no longer valid', reason: 'CHANGED' });
   }

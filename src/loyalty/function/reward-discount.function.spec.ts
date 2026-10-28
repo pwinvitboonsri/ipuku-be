@@ -17,9 +17,14 @@ describe('rewardDiscount', () => {
     expect(rewardDiscount({ ...base, discount_satang: 2000 }, lines, 1500)).toEqual({ ok: true, amount: 1500 });
   });
 
-  it('free item: priciest matching unit up to the cap, or ITEM_MISSING', () => {
-    const r = { ...base, type: RewardType.FREE_ITEM, product_id: 'latte', max_discount_satang: 8500 };
-    expect(rewardDiscount(r, lines, subtotal)).toEqual({ ok: true, amount: 8500 });
+  it('free item: base price of the priciest matching unit (extras stay paid), up to the cap, or ITEM_MISSING', () => {
+    const r = { ...base, type: RewardType.FREE_ITEM, product_id: 'latte', max_discount_satang: null };
+    // large oat latte 95 − 30 extras = 65 base; plain latte 80 → 80
+    expect(rewardDiscount(r, lines, subtotal)).toEqual({ ok: true, amount: 8000 });
+    expect(rewardDiscount(r, [lines[0]], subtotal)).toEqual({ ok: true, amount: 6500 });
+    expect(rewardDiscount({ ...r, max_discount_satang: 7000 }, lines, subtotal)).toEqual({ ok: true, amount: 7000 });
+    // a category free item takes any matching line
+    expect(rewardDiscount({ ...r, product_id: null, category_ids: ['bakery'] }, lines, subtotal)).toEqual({ ok: true, amount: 6500 });
     expect(rewardDiscount({ ...r, product_id: 'matcha' }, lines, subtotal)).toEqual({ ok: false, reason: 'ITEM_MISSING' });
   });
 

@@ -700,6 +700,9 @@ model RewardCode {
   discount_satang Int?
   expires_at      DateTime
   applied_at      DateTime?
+  /// scanned at the counter before the order exists (APPLIED, no order): held until then,
+  /// after that it goes back to the customer
+  reserved_until  DateTime?
   used_at         DateTime?
   cancelled_at    DateTime?
   update_at       DateTime         @default(now()) @updatedAt

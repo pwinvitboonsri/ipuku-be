@@ -13,6 +13,28 @@ import { formatCode, memberLabel, normalizeCode, randomCode, randomSeed } from '
 import { REWARD_QR_PERIOD_S } from './function/reward-qr.function.js';
 import { earnMessage } from './function/line-messages.function.js';
 
+type DetailSource = Prisma.RewardGetPayload<{ include: { product: { select: { name: true } } } }>;
+export type RewardDetail = ReturnType<typeof rewardDetail>;
+
+/// what a reward gives, for the LINE detail sheet and the "tell the staff" line
+function rewardDetail(r: DetailSource, options: { id: string; name: string }[] = []) {
+  return {
+    type: r.type,
+    discount_satang: r.discount_satang,
+    percent: r.percent,
+    max_discount_satang: r.max_discount_satang,
+    min_spend_satang: r.min_spend_satang,
+    product_name: r.product?.name ?? null,
+    option_names: options.filter((o) => r.option_ids.includes(o.id)).map((o) => o.name),
+    // a free item from a list or category: the customer picks which one
+    pick: r.product_ids.length + r.category_ids.length > 0,
+    buy_qty: r.buy_qty,
+    get_qty: r.get_qty,
+    get_percent: r.get_percent,
+    ends_at: r.ends_at,
+  };
+}
+
 const HISTORY = 30;
 const HISTORY_PAGE = 30;
 // promotions starting within this many days show as "coming soon"
@@ -68,6 +90,8 @@ export class LoyaltyMemberService {
 
   // My Card: membership state, both balances, next rewards, coupons and recent history
   async me(user: LineIdentity) {
+    // a counter hold that ran out comes back to this screen first
+    await this.orders.releaseLapsed();
     const program = await this.program.get();
     const { member, found } = await this.findMember(user, program.consent_version);
     const stampReward = await this.prisma.reward.findFirst({
@@ -358,6 +382,8 @@ export class LoyaltyMemberService {
 
   // Rewards (points or stamps) with what this member can afford, their coupons, and any code on screen now
   async rewards(user: LineIdentity) {
+    // a counter hold that ran out comes back to this screen first
+    await this.orders.releaseLapsed();
     const member = await this.member(user);
     const now = new Date();
     const balances = await this.ledger.balances(member.id);
@@ -373,26 +399,18 @@ export class LoyaltyMemberService {
         include: { reward: { include: { product: { select: { name: true, image_url: true } } } } },
       }),
       this.prisma.rewardCode.findFirst({
-        where: { member_id: member.id, status: RewardCodeStatus.ACTIVE, expires_at: { gt: now } },
+        where: {
+          member_id: member.id,
+          OR: [{ status: RewardCodeStatus.ACTIVE, expires_at: { gt: now } }, { status: RewardCodeStatus.APPLIED, order_id: null }],
+        },
         orderBy: { create_at: 'desc' },
+        include: { reward: { include: { product: { select: { name: true } } } } },
       }),
     ]);
     const available = (c: LoyaltyCurrency) => (c === LoyaltyCurrency.STAMPS ? balances.stamps : balances.points).available;
-    const optionIds = [...new Set([...rewards, ...coupons.map((c) => c.reward)].flatMap((r) => r.option_ids))];
+    const optionIds = [...new Set([...rewards, ...coupons.map((c) => c.reward), ...(active ? [active.reward] : [])].flatMap((r) => r.option_ids))];
     const options = optionIds.length ? await this.prisma.modifierOption.findMany({ where: { id: { in: optionIds } }, select: { id: true, name: true } }) : [];
-    // what the reward gives, for the detail sheet
-    const detail = (r: (typeof rewards)[number]) => ({
-      discount_satang: r.discount_satang,
-      percent: r.percent,
-      max_discount_satang: r.max_discount_satang,
-      min_spend_satang: r.min_spend_satang,
-      product_name: r.product?.name ?? null,
-      option_names: options.filter((o) => r.option_ids.includes(o.id)).map((o) => o.name),
-      buy_qty: r.buy_qty,
-      get_qty: r.get_qty,
-      get_percent: r.get_percent,
-      ends_at: r.ends_at,
-    });
+    const detail = (r: DetailSource) => rewardDetail(r, options);
     return {
       ...balances.points,
       stamps: balances.stamps,
@@ -401,7 +419,6 @@ export class LoyaltyMemberService {
         name: r.name,
         cost_points: r.cost_points,
         cost_currency: r.cost_currency,
-        type: r.type,
         image_url: r.image_url ?? r.product?.image_url ?? null,
         affordable: available(r.cost_currency) >= r.cost_points,
         ...detail(r),
@@ -410,18 +427,29 @@ export class LoyaltyMemberService {
         id: c.id,
         source: c.source,
         reward_name: c.reward.name,
-        type: c.reward.type,
         image_url: c.reward.image_url ?? c.reward.product?.image_url ?? null,
         valid_until: c.valid_until,
         create_at: c.create_at,
         ...detail(c.reward),
       })),
-      active_code: active && this.codeView(active),
+      active_code: active && this.codeView(active, detail(active.reward)),
     };
   }
 
-  private codeView(c: { code: string; seed: string; reward_name: string; cost_points: number; cost_currency: LoyaltyCurrency; coupon_id: string | null; expires_at: Date; status: RewardCodeStatus }) {
+  private async detailFor(rewardId: string) {
+    const r = await this.prisma.reward.findUniqueOrThrow({ where: { id: rewardId }, include: { product: { select: { name: true } } } });
+    const options = r.option_ids.length ? await this.prisma.modifierOption.findMany({ where: { id: { in: r.option_ids } }, select: { id: true, name: true } }) : [];
+    return rewardDetail(r, options);
+  }
+
+  // `reward`: what it gives, so the LINE screen can say what to tell the staff
+  private codeView(
+    c: { code: string; seed: string; reward_name: string; cost_points: number; cost_currency: LoyaltyCurrency; coupon_id: string | null; expires_at: Date; status: RewardCodeStatus },
+    reward: RewardDetail | null = null,
+  ) {
     return {
+      status: c.status,
+      reward,
       code: c.code,
       display_code: formatCode(c.code),
       seed: c.seed,
@@ -444,6 +472,8 @@ export class LoyaltyMemberService {
   // Confirm a reward: issues a code that holds its points/stamps until it's used, cancelled or expires.
   // Showing a new code cancels the member's previous one.
   async redeem(user: LineIdentity, rewardId: string) {
+    // a counter hold that ran out comes back to this screen first
+    await this.orders.releaseLapsed();
     const member = await this.member(user);
     const program = await this.program.get();
 
@@ -475,11 +505,13 @@ export class LoyaltyMemberService {
       });
     });
 
-    return { ...this.codeView(code), ...(await this.ledger.balance(member.id, this.prisma, code.cost_currency)) };
+    return { ...this.codeView(code, await this.detailFor(code.reward_id)), ...(await this.ledger.balance(member.id, this.prisma, code.cost_currency)) };
   }
 
   // Use a wallet coupon: same rotating QR as a bought reward, costs nothing; the coupon is spent when the order is paid
   async useCoupon(user: LineIdentity, couponId: string) {
+    // a counter hold that ran out comes back to this screen first
+    await this.orders.releaseLapsed();
     const member = await this.member(user);
     const program = await this.program.get();
 
@@ -515,11 +547,13 @@ export class LoyaltyMemberService {
       });
     });
 
-    return { ...this.codeView(code), ...(await this.ledger.balance(member.id)) };
+    return { ...this.codeView(code, await this.detailFor(code.reward_id)), ...(await this.ledger.balance(member.id)) };
   }
 
   // LIFF polls this while the QR is on screen: ACTIVE → APPLIED (scanned) → USED (paid)
   async codeStatus(user: LineIdentity, codeInput: string) {
+    // a counter hold that ran out comes back to this screen first
+    await this.orders.releaseLapsed();
     const member = await this.member(user);
     const code = await this.ownCode(member.id, codeInput);
     const expired = code.status === RewardCodeStatus.ACTIVE && code.expires_at <= new Date();
@@ -535,6 +569,8 @@ export class LoyaltyMemberService {
   }
 
   async cancelCode(user: LineIdentity, codeInput: string) {
+    // a counter hold that ran out comes back to this screen first
+    await this.orders.releaseLapsed();
     const member = await this.member(user);
     const code = await this.ownCode(member.id, codeInput);
     // an applied code is on an open order at the counter; only the POS can release it
