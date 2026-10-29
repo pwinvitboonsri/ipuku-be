@@ -14,6 +14,7 @@ import { LoyaltyMemberService } from './loyalty-member.service.js';
 import { LoyaltyAdminService } from './loyalty-admin.service.js';
 import { LoyaltyPerksService } from './loyalty-perks.service.js';
 import { rewardQrPayload, rewardToken, rewardWindow } from './function/reward-qr.function.js';
+import { ShiftAutoService } from '../shop-hours/shift-auto.service.js';
 
 // The whole loyalty design against a real Postgres: join → earn → redeem → refund.
 // Runs only with LOYALTY_TEST_DATABASE_URL set to a THROWAWAY database (it truncates tables).
@@ -42,7 +43,7 @@ describe.skipIf(!url)('loyalty flow (database)', () => {
   const perks = new LoyaltyPerksService(prisma, line, loyaltyOrders);
   const members = new LoyaltyMemberService(prisma, line, ledger, program, loyaltyOrders, perks);
   const admin = new LoyaltyAdminService(prisma, audit, program, loyaltyOrders, perks);
-  const orders = new OrderService(prisma, audit, loyaltyOrders);
+  const orders = new OrderService(prisma, audit, loyaltyOrders, new ShiftAutoService(prisma, loyaltyOrders));
   const payments = new PaymentService(prisma, audit, new StockMovementService(prisma, audit), loyaltyOrders);
 
   const ploy: LineIdentity = { userId: 'U-ploy', name: 'Ploy S.', picture: null, expiresAt: Date.now() + 3600_000 };
@@ -221,7 +222,7 @@ describe.skipIf(!url)('loyalty v2: earn rules, perks, stamps and new reward type
   const perks = new LoyaltyPerksService(prisma, line, loyaltyOrders);
   const members = new LoyaltyMemberService(prisma, line, ledger, program, loyaltyOrders, perks);
   const admin = new LoyaltyAdminService(prisma, audit, program, loyaltyOrders, perks);
-  const orders = new OrderService(prisma, audit, loyaltyOrders);
+  const orders = new OrderService(prisma, audit, loyaltyOrders, new ShiftAutoService(prisma, loyaltyOrders));
   const payments = new PaymentService(prisma, audit, new StockMovementService(prisma, audit), loyaltyOrders);
 
   const ploy: LineIdentity = { userId: 'U-ploy2', name: 'Ploy', picture: null, expiresAt: Date.now() + 3600_000 };

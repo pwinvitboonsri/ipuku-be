@@ -1,32 +1,12 @@
 // Date helpers and pure aggregation for the Back office dashboard.
 // Days are Thailand calendar days (UTC+7, no daylight saving); the DB stores UTC.
 
-const BKK_MS = 7 * 3_600_000;
-const DAY_MS = 86_400_000;
+import { addDays, bkkDay, dayStart, daysBetween } from '../../common/time/bkk-time.function.js';
 
-/// 'YYYY-MM-DD' (Thailand) of a UTC instant
-export function bkkDay(at: Date): string {
-  return new Date(at.getTime() + BKK_MS).toISOString().slice(0, 10);
-}
+export { addDays, bkkDay, dayStart, daysBetween };
 
 /// 'YYYY-MM' (Thailand) of a UTC instant
 export const bkkMonth = (at: Date) => bkkDay(at).slice(0, 7);
-
-/// UTC instant where a Thailand day starts
-export function dayStart(day: string): Date {
-  const [y, m, d] = day.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d) - BKK_MS);
-}
-
-export function addDays(day: string, n: number): string {
-  return bkkDay(new Date(dayStart(day).getTime() + n * DAY_MS));
-}
-
-export function daysBetween(from: string, to: string): string[] {
-  const out: string[] = [];
-  for (let d = from; d <= to; d = addDays(d, 1)) out.push(d);
-  return out;
-}
 
 export function addMonths(month: string, n: number): string {
   const [y, m] = month.split('-').map(Number);

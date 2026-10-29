@@ -4,7 +4,8 @@ import { AuditAction } from '../../generated/prisma/enums.js';
 import { Prisma } from '../../generated/prisma/client.js';
 
 interface CreateAuditLogParams {
-  staffId: string;
+  /// null = done by the system (e.g. the shop schedule)
+  staffId: string | null;
   action: AuditAction;
 
   entityType: string;

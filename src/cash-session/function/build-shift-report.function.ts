@@ -17,8 +17,11 @@ export type ReportSessionInput = {
   variance_satang: number | null;
   open_at: Date;
   close_at: Date | null;
-  opened_by_staff: { id: string; name: string };
+  /// null: opened by the shop schedule
+  opened_by_staff: { id: string; name: string } | null;
   close_by_staff: { id: string; name: string } | null;
+  auto_opened?: boolean;
+  auto_closed?: boolean;
 };
 
 export type ReportOrderInput = {
@@ -57,7 +60,8 @@ export type ReportAuditInput = {
   entity_id: string | null;
   metadata: unknown;
   create_at: Date;
-  staff: { id: string; name: string };
+  /// null: done by the system (auto-close voided an unpaid order)
+  staff: { id: string; name: string } | null;
 };
 
 export type TenderLine = {
@@ -85,8 +89,11 @@ export type ShiftReport = {
     open_at: Date;
     close_at: Date | null;
     duration_minutes: number | null;
-    opened_by: { id: string; name: string };
+    /// null = by the shop schedule
+    opened_by: { id: string; name: string } | null;
     closed_by: { id: string; name: string } | null;
+    auto_opened: boolean;
+    auto_closed: boolean;
     first_order_number: number | null;
     last_order_number: number | null;
   };
@@ -294,7 +301,7 @@ export function buildShiftReport(
       order_number: o.order_number,
       amount_satang: o.total_satang,
       method: null,
-      staff_name: a?.staff.name ?? null,
+      staff_name: a?.staff?.name ?? null,
       at: a?.create_at ?? o.create_at,
       reason: reasonOf(a?.metadata),
     };
@@ -310,7 +317,7 @@ export function buildShiftReport(
         ? rows.reduce((t, p) => t - p.amount_satang, 0)
         : o.total_satang,
       method: methods.length > 1 ? 'MIXED' : (methods[0] ?? null),
-      staff_name: a?.staff.name ?? null,
+      staff_name: a?.staff?.name ?? null,
       at: a?.create_at ?? rows[0]?.create_at ?? o.create_at,
       reason: reasonOf(a?.metadata),
     };
@@ -336,6 +343,8 @@ export function buildShiftReport(
         : null,
       opened_by: session.opened_by_staff,
       closed_by: session.close_by_staff,
+      auto_opened: session.auto_opened ?? false,
+      auto_closed: session.auto_closed ?? false,
       first_order_number: numbers.length ? Math.min(...numbers) : null,
       last_order_number: numbers.length ? Math.max(...numbers) : null,
     },

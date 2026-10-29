@@ -17,6 +17,7 @@ import {
 } from './function/build-order-item.function.js';
 import { orderInclude } from './function/order.include.js';
 import { LoyaltyOrderService } from '../loyalty/loyalty-order.service.js';
+import { ShiftAutoService } from '../shop-hours/shift-auto.service.js';
 
 // order_number collisions (two orders at once) are retried
 const MAX_CREATE_ATTEMPTS = 3;
@@ -27,6 +28,7 @@ export class OrderService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly loyalty: LoyaltyOrderService,
+    private readonly shifts: ShiftAutoService,
   ) {}
 
   async getList(dto: GetOrderListDTO) {
@@ -78,6 +80,8 @@ export class OrderService {
     // set by the Grab webhook; the POS endpoint always creates WALK_IN orders
     channel: OrderChannel = OrderChannel.WALK_IN,
   ) {
+    // with auto shifts: close yesterday's, open today's on first use (POS or Grab)
+    await this.shifts.current();
     for (let attempt = 1; ; attempt++) {
       try {
         const { order, created } = await this.createInTransaction(

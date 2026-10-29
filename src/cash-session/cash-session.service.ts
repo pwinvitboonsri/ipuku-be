@@ -10,21 +10,20 @@ import { GetSessionById } from './dto/get-session-by-id.dto.js';
 import { GetSessionList } from './dto/get-session-list.dto.js';
 import { AuditAction, Status } from '../generated/prisma/enums.js';
 import { buildShiftReport } from './function/build-shift-report.function.js';
+import { ShiftAutoService } from '../shop-hours/shift-auto.service.js';
 
 const staffName = { select: { id: true, name: true } } as const;
 
 @Injectable()
 export class CashSessionService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shifts: ShiftAutoService,
+  ) {}
 
+  // with auto shifts on, this also closes an overdue shift and opens today's during opening hours
   async currentSession() {
-    const session = await this.prisma.cashSession.findFirst({
-      where: {
-        close_at: null,
-      },
-    });
-
-    return session;
+    return await this.shifts.current();
   }
 
   async openSession(dto: OpenSessionDTO, actorStaffId: string) {

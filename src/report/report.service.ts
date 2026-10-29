@@ -4,6 +4,8 @@ import { AuditAction, CouponSource, LoyaltyCurrency, RewardCodeStatus, StockMove
 import { PrismaService } from '../prisma/prisma.service.js';
 import { BASE_EARN_LABEL, type EarnLine } from '../loyalty/function/compute-earn.function.js';
 import { DashboardQueryDTO } from './dto/dashboard-query.dto.js';
+import { ShiftAutoService } from '../shop-hours/shift-auto.service.js';
+import { plans } from '../shop-hours/function/schedule.function.js';
 import { bkkDay, bkkMonth, cohortTable, daysBetween, fillDays, period, previousPeriod, type Period } from './function/dashboard.function.js';
 
 const MAX_DAYS = 366;
@@ -49,7 +51,10 @@ const reasonOf = (metadata: unknown): string | null =>
 // Sums run in SQL (grouped by Thailand day); member stats and cohorts are as of now.
 @Injectable()
 export class ReportService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shiftAuto: ShiftAutoService,
+  ) {}
 
   async dashboard(dto: DashboardQueryDTO) {
     if (dto.to < dto.from || (dto.prev_from && dto.prev_to && dto.prev_to < dto.prev_from)) throw new BadRequestException('Range ends before it starts');
@@ -80,10 +85,16 @@ export class ReportService {
       this.cohorts(now),
       this.prisma.loyaltyProgram.findUnique({ where: { id: 1 }, select: { points_per_unit: true, unit_satang: true } }),
     ]);
+    // days the shop was closed (weekly day off or a special day): drawn as Closed, left out of per-day averages
+    const lowDay = prev.from < cur.from ? prev.from : cur.from;
+    const highDay = prev.to > cur.to ? prev.to : cur.to;
+    const sched = await this.shiftAuto.schedule(lowDay, highDay);
+    const closedDays = sched.weekly.length || sched.specials.length ? plans(lowDay, highDay, sched.weekly, sched.specials).filter((p) => !p.open).map((p) => p.date) : [];
 
     return {
       range: { from: cur.from, to: cur.to, prev_from: prev.from, prev_to: prev.to, prev_until: prev.end.toISOString() },
       now: now.toISOString(),
+      closed_days: closedDays,
       program: program ?? { points_per_unit: 1, unit_satang: 1000 },
       loyalty_since: members.reduce<string | null>((a, m) => (a == null || m.joined_at < a ? m.joined_at : a), null),
       days,
@@ -280,7 +291,8 @@ export class ReportService {
         _count: { _all: true },
       }),
     ]);
-    const ids = [...new Set([...sales.map((s) => s.staff_id), ...adj.map((a) => a.staff_id)])];
+    // voids by the schedule (no staff) aren't anyone's
+    const ids = [...new Set([...sales.map((s) => s.staff_id), ...adj.map((a) => a.staff_id)])].filter((x): x is string => !!x);
     const people = await this.prisma.staff.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, role: true } });
     return people
       .map((p) => {
@@ -319,7 +331,7 @@ export class ReportService {
         order_id: a.entity_id,
         order_number: o?.order_number ?? null,
         amount_satang: a.action === AuditAction.REFUND_ORDER && refunded ? refunded : (o?.total_satang ?? 0),
-        staff_name: a.staff.name,
+        staff_name: a.staff?.name ?? null,
         at: a.create_at,
         reason: reasonOf(a.metadata),
       };

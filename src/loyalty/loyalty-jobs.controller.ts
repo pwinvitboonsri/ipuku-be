@@ -4,6 +4,7 @@ import { SkipThrottle } from '@nestjs/throttler';
 import { timingSafeEqual } from 'node:crypto';
 import { LoyaltyPerksService } from './loyalty-perks.service.js';
 import { LoyaltyOrderService } from './loyalty-order.service.js';
+import { ShiftAutoService } from '../shop-hours/shift-auto.service.js';
 
 // Only the scheduler (ops/keep-warm cron worker) knows JOBS_SECRET; off until it's set
 @Injectable()
@@ -28,6 +29,7 @@ export class LoyaltyJobsController {
   constructor(
     private readonly perks: LoyaltyPerksService,
     private readonly orders: LoyaltyOrderService,
+    private readonly shifts: ShiftAutoService,
   ) {}
 
   // Once a day (safe to run more often: every grant is once per member per period)
@@ -36,6 +38,8 @@ export class LoyaltyJobsController {
   async daily() {
     // rewards a counter held and never used go back to their members (also done lazily on every read)
     await this.orders.releaseLapsed();
+    // a shift left open past closing time closes even if nobody opens the POS
+    await this.shifts.reconcile();
     const birthdays = await this.perks.runBirthdays();
     return { success: true, data: { birthdays } };
   }

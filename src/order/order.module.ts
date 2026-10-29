@@ -6,6 +6,7 @@ import { CommonModule } from '../common/common.module.js';
 import { PaymentService } from './payment.service.js';
 import { StockMovementModule } from '../stock-movement/stock-movement.module.js';
 import { LoyaltyModule } from '../loyalty/loyalty.module.js';
+import { ShopHoursModule } from '../shop-hours/shop-hours.module.js';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { LoyaltyModule } from '../loyalty/loyalty.module.js';
     CommonModule,
     StockMovementModule,
     LoyaltyModule,
+    ShopHoursModule,
   ],
   controllers: [OrderController],
   providers: [OrderService, PaymentService],

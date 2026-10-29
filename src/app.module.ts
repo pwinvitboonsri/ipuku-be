@@ -28,6 +28,8 @@ import { GrabModule } from './grab/grab.module.js';
 import { LineModule } from './line/line.module.js';
 import { LoyaltyModule } from './loyalty/loyalty.module.js';
 import { ReportModule } from './report/report.module.js';
+import { ShopHoursModule } from './shop-hours/shop-hours.module.js';
+import { JobsModule } from './jobs/jobs.module.js';
 
 @Module({
   imports: [
@@ -67,6 +69,8 @@ import { ReportModule } from './report/report.module.js';
     LineModule,
     LoyaltyModule,
     ReportModule,
+    ShopHoursModule,
+    JobsModule,
   ],
   controllers: [],
   providers: [

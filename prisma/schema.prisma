@@ -210,6 +210,9 @@ model Staff {
   loyalty_program   LoyaltyProgram[]
   opened_by_staff   CashSession[]      @relation("opened_by_staff_id")
   close_by_staff    CashSession[]      @relation("close_by_staff_id")
+  shop_settings     ShopSettings[]     @relation("shop_settings_update_by")
+  weekly_hours      WeeklyHours[]      @relation("weekly_hours_update_by")
+  special_day       SpecialDay[]       @relation("special_day_update_by")
 }
 
 model AuditLog {
@@ -217,8 +220,9 @@ model AuditLog {
 
   action AuditAction
 
-  staff_id String
-  staff    Staff  @relation(fields: [staff_id], references: [id])
+  /// null = done by the system (e.g. a shift closed by the schedule)
+  staff_id String?
+  staff    Staff? @relation(fields: [staff_id], references: [id])
 
   entity_type String
   entity_id   String?
@@ -404,10 +408,15 @@ model CashSession {
   open_at  DateTime  @default(now())
   close_at DateTime?
 
+  /// opened / closed by the shop schedule (no staff); an auto-closed shift has no cash count
+  auto_opened Boolean @default(false)
+  auto_closed Boolean @default(false)
+
   order              Order[]
-  opened_by_staff_id String
+  /// null when the schedule opened it
+  opened_by_staff_id String?
   close_by_staff_id  String?
-  opened_by_staff    Staff   @relation("opened_by_staff_id", fields: [opened_by_staff_id], references: [id])
+  opened_by_staff    Staff?  @relation("opened_by_staff_id", fields: [opened_by_staff_id], references: [id])
   close_by_staff     Staff?  @relation("close_by_staff_id", fields: [close_by_staff_id], references: [id])
 }
 
@@ -813,4 +822,61 @@ model PerkGrant {
   member    Member @relation(fields: [member_id], references: [id])
 
   @@unique([member_id, kind, period])
+}
+
+// ── Shop hours: when the shop is open, so shifts can open and close on their own
+
+enum SpecialDayKind {
+  /// shop closed for the whole range (holiday, vacation)
+  CLOSED
+  /// different hours on that day (e.g. closes early)
+  HOURS
+}
+
+/// Shift automation settings (one row, id 1)
+model ShopSettings {
+  id                       Int      @id @default(1)
+  /// open a shift on first use during open hours, close it after closing time
+  auto_shift               Boolean  @default(false)
+  /// minutes after closing time before the shift closes by itself
+  auto_close_grace_minutes Int      @default(30)
+  /// cash float an automatically opened shift starts with
+  default_float_satang     Int      @default(0)
+  update_at                DateTime @default(now()) @updatedAt
+
+  update_by_staff_id String?
+  update_by_staff    Staff?  @relation("shop_settings_update_by", fields: [update_by_staff_id], references: [id])
+}
+
+/// The weekly pattern from a Thailand date on; the latest one that has started applies, a later one is a planned change
+model WeeklyHours {
+  id             String   @id @default(uuid(7))
+  /// Thailand date YYYY-MM-DD
+  effective_from String   @unique
+  /// 7 entries, index 0 = Sunday: { open: boolean, open_min: number, close_min: number } (minutes after midnight)
+  days           Json
+  update_at      DateTime @default(now()) @updatedAt
+  create_at      DateTime @default(now())
+
+  update_by_staff_id String?
+  update_by_staff    Staff?  @relation("weekly_hours_update_by", fields: [update_by_staff_id], references: [id])
+}
+
+/// A closed range or special hours; on overlapping days the newest one wins
+model SpecialDay {
+  id        String         @id @default(uuid(7))
+  kind      SpecialDayKind
+  /// Thailand dates YYYY-MM-DD, both included (HOURS: one day)
+  from_date String
+  to_date   String
+  open_min  Int?
+  close_min Int?
+  note      String?
+  update_at DateTime       @default(now()) @updatedAt
+  create_at DateTime       @default(now())
+
+  update_by_staff_id String?
+  update_by_staff    Staff?  @relation("special_day_update_by", fields: [update_by_staff_id], references: [id])
+
+  @@index([from_date, to_date])
 }
